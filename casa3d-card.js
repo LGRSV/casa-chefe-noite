@@ -1,0 +1,6408 @@
+/*
+ * Casa 3D — cartão Lovelace para Home Assistant (+ demo standalone)
+ * Modelo 3D da casa em Three.js. As luzes acendem conforme o estado das
+ * entidades do HA; clicar num cômodo (ou num chip) alterna o interruptor.
+ *
+ * Instalação: veja o README.md ao lado deste arquivo.
+ */
+import * as THREE from 'https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.min.js';
+
+export const VERSION = '1.10.3';
+
+// quality leve: quantas luzes reais cada item mantém (as outras viram só malha + halo); min: 1 por item. Itens fora da tabela (1 fixture) ficam como estão.
+const LITE_LIGHTS = { externa: 2, led_piscina: 1, banheiro: 1 };
+const MIN_LIGHTS = { externa: 1, led_piscina: 1, banheiro: 1 };
+// Governador de qualidade (ver _govFrame): por nível, a escala de resolução em movimento (move; min–max) e parado (idleMin–idleMax,
+// >1 = supersampling quando sobra fôlego). Trocar luzes/sombras/materiais recompila shaders, então o nível é fixo na construção.
+const GOV = {
+  alta:  { move: 1.0,  min: 0.5,  max: 1.0,  idleMax: 1.5,  idleMin: 1 },   // parado nunca abaixo da resolução cheia:
+  media: { move: 0.6,  min: 0.35, max: 0.75, idleMax: 1.25, idleMin: 1 },   // o quadro nítido é um só; a leveza fica no movimento
+  leve:  { move: 0.55, min: 0.35, max: 0.55, idleMax: 1.15, idleMin: 1 },
+  min:   { move: 0.45, min: 0.3,  max: 0.5,  idleMax: 1.0,  idleMin: 1 },
+};
+
+// Única fonte de verdade para as opções do cartão — usada tanto no construtor (antes de
+// qualquer setConfig, caso do próprio elemento já presente no HTML ao carregar o módulo)
+// quanto em setConfig(). Evita que os dois fiquem dessincronizados (foi assim que o
+// widget de clima nascia ausente: só existia no default do setConfig, não no do construtor).
+const DEFAULT_CONFIG = {
+  title: 'Casa 3D', labels: true, mode: 'night', night_vision: true, panel: true, roof: false,
+  look: 'classico',   // 'maquete' = maquete clara de estúdio sobre fundo transparente, painel do cômodo à direita · 'classico' = visual de antes
+  quality: 'auto', car_color: '#f3f3f0', entities: {},   // auto | alta | media | leve | min
+  car_model: true,   // v1.10: up! TSI do modelo 3D (modelos/up-tsi.bin); false = carro desenhado; texto = outra URL do arquivo
+  latitude: -10.2, longitude: -48.3, timezone: 'America/Sao_Paulo', orientation: 180,
+  weather: true, weather_city: 'Palmas, TO',
+  telhado_pessoa: true,   // v1.4: na visão de Pessoa o Telhado (forro) liga sozinho e volta ao sair
+};
+
+// ---------------------------------------------------------------------------
+// Entidades (sobrescreva no YAML do cartão em `entities:`)
+// ---------------------------------------------------------------------------
+export const DEFAULT_ENTITIES = {
+  quarto:        'switch.quarto_interruptor_1',
+  led_quarto:    'light.0xa4c1387cf3257eb7',
+  sala:          'light.interruptor_cozinha_left',
+  balcao:        'switch.balcao_interruptor_1',
+  externa:       'light.interruptor_cozinha_center',
+  // Hoje o seu dashboard liga o overlay "Banheiro+dispensa" ao mesmo
+  // interruptor da luz externa. Troque para light.interruptor_cozinha_right
+  // (o 3º botão do interruptor da cozinha) se for esse o circuito.
+  banheiro:      'light.interruptor_cozinha_center',
+  garagem:       'switch.garagem_interruptor_1',
+  led_piscina:   'switch.led_piscina_interruptor_1',
+  bomba_piscina: 'switch.piscina_interruptor_1',
+  ac:            'climate.ir_ac_cozinha_ac_cozinha',
+  tv:            'media_player.m_s',
+  presenca:      'binary_sensor.0xa4c13846f2a0df88_occupancy',   // radar mmWave
+  lux:           'sensor.0xa4c13846f2a0df88_illuminance',
+  pessoa:        'person.sandro',
+  sun:           'sun.sun',
+};
+
+// ---------------------------------------------------------------------------
+// Itens controláveis: luminárias (posição em metros, X→direita, Z→frente)
+// i = intensidade (cd), d = alcance (m), shadow = projeta sombra nas paredes
+// ---------------------------------------------------------------------------
+export const ITEMS = [
+  { key: 'quarto', label: 'Quarto', short: 'Luz', kind: 'light', icon: 'bulb', color: 0xffd9ab,
+    fixtures: [{ p: [5.2, 2.55, 2.1], i: 30, d: 6.5, shadow: true }] },
+  { key: 'led_quarto', label: 'LED Quarto', short: 'LED', kind: 'light', icon: 'led', rgb: true, color: 0xffb070,
+    fixtures: [{ p: [4.15, 1.0, 0.5], i: 7, d: 4.5, lamp: true }] },
+  { key: 'sala', label: 'Sala / Cozinha', short: 'Luz', kind: 'light', icon: 'bulb', color: 0xfff1dc,
+    fixtures: [{ p: [8.45, 2.55, 2.1], i: 42, d: 7.5, shadow: true }] },
+  { key: 'balcao', label: 'Balcão', short: 'Luz', kind: 'light', icon: 'bulb', color: 0xfff5e4,
+    fixtures: [{ p: [11.4, 2.55, 1.7], i: 20, d: 4.5 }] },
+  { key: 'externa', label: 'Externa', short: 'Luz externa', kind: 'light', icon: 'bulb', color: 0xffe7c2,
+    fixtures: [
+      { p: [2.1, 2.5, 5.2], i: 14, d: 5.5, shadow: true },
+      { p: [6.3, 2.5, 5.2], i: 14, d: 5.5, shadow: true },
+      { p: [10.4, 2.5, 5.2], i: 14, d: 5.5, shadow: true },
+      { p: [13.2, 2.0, 8.4], i: 12, d: 7, sconce: true },
+      { p: [13.2, 2.0, 11.4], i: 12, d: 7, sconce: true },
+    ] },
+  { key: 'banheiro', label: 'Banheiro + Dispensa', short: 'Luz', kind: 'light', icon: 'bulb', color: 0xfff7ea,
+    fixtures: [
+      { p: [1.2, 2.5, 7.5], i: 12, d: 3.8 },
+      { p: [1.2, 2.5, 9.7], i: 8, d: 3.2 },
+    ] },
+  { key: 'garagem', label: 'Garagem', short: 'Luz', kind: 'light', icon: 'bulb', color: 0xfff1dc,
+    fixtures: [{ p: [1.5, 2.5, 13.3], i: 18, d: 6.5, shadow: true }] },
+  { key: 'led_piscina', label: 'LED Piscina', short: 'LED', kind: 'light', icon: 'pool', color: 0x2f9dff,
+    fixtures: [
+      { p: [4.7, -0.55, 8.34], i: 9, d: 4.5, under: true },
+      { p: [6.5, -0.55, 8.34], i: 9, d: 4.5, under: true },
+      { p: [8.3, -0.55, 8.34], i: 9, d: 4.5, under: true },
+    ] },
+  { key: 'bomba_piscina', label: 'Bomba Piscina', short: 'Bomba', kind: 'switch', icon: 'pump' },
+  { key: 'ac', label: 'AC Cozinha', short: 'Ar', kind: 'climate', icon: 'ac' },
+  { key: 'tv', label: 'TV Quarto', short: 'TV', kind: 'media', icon: 'tv' },
+  { key: 'presenca', label: 'Presença', kind: 'sensor', icon: 'motion' },
+  { key: 'lux', label: 'Iluminância', kind: 'sensor', icon: 'lux' },
+  { key: 'pessoa', label: 'Sandro', kind: 'sensor', icon: 'person' },
+];
+
+/* Ícones: Phosphor Icons 2.1.1 (@phosphor-icons/core), viewBox 0 0 256 256, path data embutido.
+ * MIT License
+ *
+ * Copyright (c) 2023 Phosphor Icons
+ *
+ * Permission is hereby granted, free of charge, to any person obtaining a copy
+ * of this software and associated documentation files (the "Software"), to deal
+ * in the Software without restriction, including without limitation the rights
+ * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the Software is
+ * furnished to do so, subject to the following conditions:
+ *
+ * The above copyright notice and this permission notice shall be included in all
+ * copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+ * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+ * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+ * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+ * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+ * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+ * SOFTWARE.
+ */
+
+// Ícones (Phosphor 2.1.1, viewBox 256): r = regular (desligado, navegação), f = fill (ligado; o CSS troca)
+const ICONS = {
+  bulb: { r: 'M176,232a8,8,0,0,1-8,8H88a8,8,0,0,1,0-16h80A8,8,0,0,1,176,232Zm40-128a87.55,87.55,0,0,1-33.64,69.21A16.24,16.24,0,0,0,176,186v6a16,16,0,0,1-16,16H96a16,16,0,0,1-16-16v-6a16,16,0,0,0-6.23-12.66A87.59,87.59,0,0,1,40,104.49C39.74,56.83,78.26,17.14,125.88,16A88,88,0,0,1,216,104Zm-16,0a72,72,0,0,0-73.74-72c-39,.92-70.47,33.39-70.26,72.39a71.65,71.65,0,0,0,27.64,56.3A32,32,0,0,1,96,186v6h64v-6a32.15,32.15,0,0,1,12.47-25.35A71.65,71.65,0,0,0,200,104Zm-16.11-9.34a57.6,57.6,0,0,0-46.56-46.55,8,8,0,0,0-2.66,15.78c16.57,2.79,30.63,16.85,33.44,33.45A8,8,0,0,0,176,104a9,9,0,0,0,1.35-.11A8,8,0,0,0,183.89,94.66Z', f: 'M176,232a8,8,0,0,1-8,8H88a8,8,0,0,1,0-16h80A8,8,0,0,1,176,232Zm40-128a87.55,87.55,0,0,1-33.64,69.21A16.24,16.24,0,0,0,176,186v6a16,16,0,0,1-16,16H96a16,16,0,0,1-16-16v-6a16,16,0,0,0-6.23-12.66A87.59,87.59,0,0,1,40,104.49C39.74,56.83,78.26,17.14,125.88,16A88,88,0,0,1,216,104Zm-32.11-9.34a57.6,57.6,0,0,0-46.56-46.55,8,8,0,0,0-2.66,15.78c16.57,2.79,30.63,16.85,33.44,33.45A8,8,0,0,0,176,104a9,9,0,0,0,1.35-.11A8,8,0,0,0,183.89,94.66Z' },
+  led: { r: 'M247.35,148.85l-48-112A8,8,0,0,0,192,32H64a8,8,0,0,0-7.35,4.85l-48,112A8,8,0,0,0,16,160H120v48H96a8,8,0,0,0,0,16h64a8,8,0,0,0,0-16H136V160h56v32a8,8,0,0,0,16,0V160h32a8,8,0,0,0,7.35-11.15ZM28.13,144,69.28,48H186.72l41.15,96Z', f: 'M246.68,156.4A8,8,0,0,1,240,160H208v32a8,8,0,0,1-16,0V160H136v48h24a8,8,0,0,1,0,16H96a8,8,0,0,1,0-16h24V160H16a8,8,0,0,1-7.35-11.15l48-112A8,8,0,0,1,64,32H192a8,8,0,0,1,7.35,4.85l48,112A8,8,0,0,1,246.68,156.4Z' },
+  pool: { r: 'M88,149.39a8,8,0,0,0,8-8V128h64v15.29a8,8,0,0,0,16,0V32a8,8,0,0,0-16,0V48H96V32a8,8,0,0,0-16,0V141.39A8,8,0,0,0,88,149.39ZM96,112V96h64v16Zm64-48V80H96V64ZM24,168a8,8,0,0,1,8-8c14.42,0,22.19,5.18,28.44,9.34C66,173.06,70.42,176,80,176s14-2.94,19.56-6.66c6.24-4.16,14-9.34,28.43-9.34s22.2,5.18,28.44,9.34c5.58,3.72,10,6.66,19.57,6.66s14-2.94,19.56-6.66c6.25-4.16,14-9.34,28.44-9.34a8,8,0,0,1,0,16c-9.58,0-14,2.94-19.56,6.66-6.25,4.16-14,9.34-28.44,9.34s-22.2-5.18-28.44-9.34C142,178.94,137.57,176,128,176s-14,2.94-19.56,6.66c-6.24,4.16-14,9.34-28.43,9.34s-22.19-5.18-28.44-9.34C46,178.94,41.58,176,32,176A8,8,0,0,1,24,168Zm208,40a8,8,0,0,1-8,8c-9.58,0-14,2.94-19.56,6.66-6.25,4.16-14,9.34-28.44,9.34s-22.2-5.18-28.44-9.34C142,218.94,137.57,216,128,216s-14,2.94-19.56,6.66c-6.24,4.16-14,9.34-28.43,9.34s-22.19-5.18-28.44-9.34C46,218.94,41.58,216,32,216a8,8,0,0,1,0-16c14.42,0,22.19,5.18,28.44,9.34C66,213.06,70.42,216,80,216s14-2.94,19.56-6.66c6.24-4.16,14-9.34,28.43-9.34s22.2,5.18,28.44,9.34c5.58,3.72,10,6.66,19.57,6.66s14-2.94,19.56-6.66c6.25-4.16,14-9.34,28.44-9.34A8,8,0,0,1,232,208Z', f: 'M24,168a8,8,0,0,1,8-8c14.42,0,22.19,5.18,28.44,9.34C66,173.06,70.42,176,80,176s14-2.94,19.56-6.66c6.24-4.16,14-9.34,28.43-9.34s22.2,5.18,28.44,9.34c5.58,3.72,10,6.66,19.57,6.66s14-2.94,19.56-6.66c6.25-4.16,14-9.34,28.44-9.34a8,8,0,0,1,0,16c-9.58,0-14,2.94-19.56,6.66-6.25,4.16-14,9.34-28.44,9.34s-22.2-5.18-28.44-9.34C142,178.94,137.57,176,128,176s-14,2.94-19.56,6.66c-6.24,4.16-14,9.34-28.43,9.34s-22.19-5.18-28.44-9.34C46,178.94,41.58,176,32,176A8,8,0,0,1,24,168Zm200,32c-14.42,0-22.19,5.18-28.44,9.34C190,213.06,185.58,216,176,216s-14-2.94-19.57-6.66c-6.24-4.16-14-9.34-28.44-9.34s-22.19,5.18-28.43,9.34C94,213.06,89.57,216,80,216s-14-2.94-19.56-6.66C54.19,205.18,46.42,200,32,200a8,8,0,0,0,0,16c9.58,0,14,2.94,19.56,6.66,6.25,4.16,14,9.34,28.44,9.34s22.19-5.18,28.43-9.34c5.58-3.72,10-6.66,19.56-6.66s14,2.94,19.57,6.66c6.24,4.16,14,9.34,28.44,9.34s22.19-5.18,28.44-9.34c5.57-3.72,10-6.66,19.56-6.66a8,8,0,0,0,0-16ZM80,141.39V32a8,8,0,0,1,16,0v8h64V32a8,8,0,0,1,16,0V143.29a8,8,0,0,1-16,0V136H96v5.39a8,8,0,0,1-16,0ZM96,72a8,8,0,0,0,8,8h48a8,8,0,0,0,0-16H104A8,8,0,0,0,96,72Zm0,32a8,8,0,0,0,8,8h48a8,8,0,0,0,0-16H104A8,8,0,0,0,96,104Z' },
+  pump: { r: 'M174,47.75a254.19,254.19,0,0,0-41.45-38.3,8,8,0,0,0-9.18,0A254.19,254.19,0,0,0,82,47.75C54.51,79.32,40,112.6,40,144a88,88,0,0,0,176,0C216,112.6,201.49,79.32,174,47.75ZM128,216a72.08,72.08,0,0,1-72-72c0-57.23,55.47-105,72-118,16.53,13,72,60.75,72,118A72.08,72.08,0,0,1,128,216Zm55.89-62.66a57.6,57.6,0,0,1-46.56,46.55A8.75,8.75,0,0,1,136,200a8,8,0,0,1-1.32-15.89c16.57-2.79,30.63-16.85,33.44-33.45a8,8,0,0,1,15.78,2.68Z', f: 'M174,47.75a254.19,254.19,0,0,0-41.45-38.3,8,8,0,0,0-9.18,0A254.19,254.19,0,0,0,82,47.75C54.51,79.32,40,112.6,40,144a88,88,0,0,0,176,0C216,112.6,201.49,79.32,174,47.75Zm9.85,105.59a57.6,57.6,0,0,1-46.56,46.55A8.75,8.75,0,0,1,136,200a8,8,0,0,1-1.32-15.89c16.57-2.79,30.63-16.85,33.44-33.45a8,8,0,0,1,15.78,2.68Z' },
+  ac: { r: 'M223.77,150.09a8,8,0,0,1-5.86,9.68l-24.64,6,6.46,24.11a8,8,0,0,1-5.66,9.8A8.25,8.25,0,0,1,192,200a8,8,0,0,1-7.72-5.93l-7.72-28.8L136,141.86v46.83l21.66,21.65a8,8,0,0,1-11.32,11.32L128,203.31l-18.34,18.35a8,8,0,0,1-11.32-11.32L120,188.69V141.86L79.45,165.27l-7.72,28.8A8,8,0,0,1,64,200a8.25,8.25,0,0,1-2.08-.27,8,8,0,0,1-5.66-9.8l6.46-24.11-24.64-6a8,8,0,0,1,3.82-15.54l29.45,7.23L112,128,71.36,104.54l-29.45,7.23A7.85,7.85,0,0,1,40,112a8,8,0,0,1-1.91-15.77l24.64-6L56.27,66.07a8,8,0,0,1,15.46-4.14l7.72,28.8L120,114.14V67.31L98.34,45.66a8,8,0,0,1,11.32-11.32L128,52.69l18.34-18.35a8,8,0,0,1,11.32,11.32L136,67.31v46.83l40.55-23.41,7.72-28.8a8,8,0,0,1,15.46,4.14l-6.46,24.11,24.64,6A8,8,0,0,1,216,112a7.85,7.85,0,0,1-1.91-.23l-29.45-7.23L144,128l40.64,23.46,29.45-7.23A8,8,0,0,1,223.77,150.09Z', f: 'M227.65,149.14a12,12,0,0,1-8.79,14.51l-20.67,5.08,5.4,20.16a12,12,0,0,1-23.18,6.22l-7.29-27.2L140,148.78V187l20.48,20.48a12,12,0,0,1-17,17L128,209l-15.51,15.52a12,12,0,0,1-17-17L116,187V148.78L82.88,167.91l-7.29,27.2a12,12,0,0,1-23.18-6.22l5.4-20.16-20.67-5.08a12,12,0,1,1,5.72-23.3l27.89,6.85L104,128,70.75,108.8l-27.89,6.85A11.8,11.8,0,0,1,40,116a12,12,0,0,1-2.85-23.65l20.67-5.08-5.4-20.16a12,12,0,0,1,23.18-6.22l7.29,27.2L116,107.21V69L95.52,48.48a12,12,0,0,1,17-17L128,47l15.51-15.52a12,12,0,1,1,17,17L140,69v38.24l33.12-19.12,7.29-27.2a12,12,0,0,1,23.18,6.22l-5.4,20.16,20.67,5.08A12,12,0,0,1,216,116a11.8,11.8,0,0,1-2.87-.35l-27.89-6.85L152,128l33.25,19.2,27.89-6.85A12,12,0,0,1,227.65,149.14Z' },
+  tv: { r: 'M216,64H147.31l34.35-34.34a8,8,0,1,0-11.32-11.32L128,60.69,85.66,18.34A8,8,0,0,0,74.34,29.66L108.69,64H40A16,16,0,0,0,24,80V200a16,16,0,0,0,16,16H216a16,16,0,0,0,16-16V80A16,16,0,0,0,216,64Zm0,136H40V80H216V200Z', f: 'M216,64H147.31l34.35-34.34a8,8,0,1,0-11.32-11.32L128,60.69,85.66,18.34A8,8,0,0,0,74.34,29.66L108.69,64H40A16,16,0,0,0,24,80V200a16,16,0,0,0,16,16H216a16,16,0,0,0,16-16V80A16,16,0,0,0,216,64Zm0,136H40V80H216V200ZM200,100v80a4,4,0,0,1-4,4H60a4,4,0,0,1-4-4V100a4,4,0,0,1,4-4H196A4,4,0,0,1,200,100Z' },
+  motion: { r: 'M128,88a40,40,0,1,0,40,40A40,40,0,0,0,128,88Zm0,64a24,24,0,1,1,24-24A24,24,0,0,1,128,152Zm73.71,7.14a80,80,0,0,1-14.08,22.2,8,8,0,0,1-11.92-10.67,63.95,63.95,0,0,0,0-85.33,8,8,0,1,1,11.92-10.67,80.08,80.08,0,0,1,14.08,84.47ZM69,103.09a64,64,0,0,0,11.26,67.58,8,8,0,0,1-11.92,10.67,79.93,79.93,0,0,1,0-106.67A8,8,0,1,1,80.29,85.34,63.77,63.77,0,0,0,69,103.09ZM248,128a119.58,119.58,0,0,1-34.29,84,8,8,0,1,1-11.42-11.2,103.9,103.9,0,0,0,0-145.56A8,8,0,1,1,213.71,44,119.58,119.58,0,0,1,248,128ZM53.71,200.78A8,8,0,1,1,42.29,212a119.87,119.87,0,0,1,0-168,8,8,0,1,1,11.42,11.2,103.9,103.9,0,0,0,0,145.56Z', f: 'M168,128a40,40,0,1,1-40-40A40,40,0,0,1,168,128Zm40,0a79.74,79.74,0,0,0-20.37-53.33,8,8,0,1,0-11.92,10.67,64,64,0,0,1,0,85.33,8,8,0,0,0,11.92,10.67A79.79,79.79,0,0,0,208,128ZM80.29,85.34A8,8,0,1,0,68.37,74.67a79.94,79.94,0,0,0,0,106.67,8,8,0,0,0,11.92-10.67,63.95,63.95,0,0,1,0-85.33Zm158.28-4A119.48,119.48,0,0,0,213.71,44a8,8,0,1,0-11.42,11.2,103.9,103.9,0,0,1,0,145.56A8,8,0,1,0,213.71,212,120.12,120.12,0,0,0,238.57,81.29ZM32.17,168.48A103.9,103.9,0,0,1,53.71,55.22,8,8,0,1,0,42.29,44a119.87,119.87,0,0,0,0,168,8,8,0,1,0,11.42-11.2A103.61,103.61,0,0,1,32.17,168.48Z' },
+  lux: { r: 'M120,40V32a8,8,0,0,1,16,0v8a8,8,0,0,1-16,0Zm72,88a64,64,0,1,1-64-64A64.07,64.07,0,0,1,192,128Zm-16,0a48,48,0,1,0-48,48A48.05,48.05,0,0,0,176,128ZM58.34,69.66A8,8,0,0,0,69.66,58.34l-8-8A8,8,0,0,0,50.34,61.66Zm0,116.68-8,8a8,8,0,0,0,11.32,11.32l8-8a8,8,0,0,0-11.32-11.32ZM192,72a8,8,0,0,0,5.66-2.34l8-8a8,8,0,0,0-11.32-11.32l-8,8A8,8,0,0,0,192,72Zm5.66,114.34a8,8,0,0,0-11.32,11.32l8,8a8,8,0,0,0,11.32-11.32ZM40,120H32a8,8,0,0,0,0,16h8a8,8,0,0,0,0-16Zm88,88a8,8,0,0,0-8,8v8a8,8,0,0,0,16,0v-8A8,8,0,0,0,128,208Zm96-88h-8a8,8,0,0,0,0,16h8a8,8,0,0,0,0-16Z', f: 'M120,40V32a8,8,0,0,1,16,0v8a8,8,0,0,1-16,0Zm8,24a64,64,0,1,0,64,64A64.07,64.07,0,0,0,128,64ZM58.34,69.66A8,8,0,0,0,69.66,58.34l-8-8A8,8,0,0,0,50.34,61.66Zm0,116.68-8,8a8,8,0,0,0,11.32,11.32l8-8a8,8,0,0,0-11.32-11.32ZM192,72a8,8,0,0,0,5.66-2.34l8-8a8,8,0,0,0-11.32-11.32l-8,8A8,8,0,0,0,192,72Zm5.66,114.34a8,8,0,0,0-11.32,11.32l8,8a8,8,0,0,0,11.32-11.32ZM40,120H32a8,8,0,0,0,0,16h8a8,8,0,0,0,0-16Zm88,88a8,8,0,0,0-8,8v8a8,8,0,0,0,16,0v-8A8,8,0,0,0,128,208Zm96-88h-8a8,8,0,0,0,0,16h8a8,8,0,0,0,0-16Z' },
+  person: { r: 'M230.92,212c-15.23-26.33-38.7-45.21-66.09-54.16a72,72,0,1,0-73.66,0C63.78,166.78,40.31,185.66,25.08,212a8,8,0,1,0,13.85,8c18.84-32.56,52.14-52,89.07-52s70.23,19.44,89.07,52a8,8,0,1,0,13.85-8ZM72,96a56,56,0,1,1,56,56A56.06,56.06,0,0,1,72,96Z', f: 'M230.93,220a8,8,0,0,1-6.93,4H32a8,8,0,0,1-6.92-12c15.23-26.33,38.7-45.21,66.09-54.16a72,72,0,1,1,73.66,0c27.39,8.95,50.86,27.83,66.09,54.16A8,8,0,0,1,230.93,220Z' },
+  auto: { r: 'M215.79,118.17a8,8,0,0,0-5-5.66L153.18,90.9l14.66-73.33a8,8,0,0,0-13.69-7l-112,120a8,8,0,0,0,3,13l57.63,21.61L88.16,238.43a8,8,0,0,0,13.69,7l112-120A8,8,0,0,0,215.79,118.17ZM109.37,214l10.47-52.38a8,8,0,0,0-5-9.06L62,132.71l84.62-90.66L136.16,94.43a8,8,0,0,0,5,9.06l52.8,19.8Z', f: 'M213.85,125.46l-112,120a8,8,0,0,1-13.69-7l14.66-73.33L45.19,143.49a8,8,0,0,1-3-13l112-120a8,8,0,0,1,13.69,7L153.18,90.9l57.63,21.61a8,8,0,0,1,3,12.95Z' },
+  home: { r: 'M219.31,108.68l-80-80a16,16,0,0,0-22.62,0l-80,80A15.87,15.87,0,0,0,32,120v96a8,8,0,0,0,8,8h64a8,8,0,0,0,8-8V160h32v56a8,8,0,0,0,8,8h64a8,8,0,0,0,8-8V120A15.87,15.87,0,0,0,219.31,108.68ZM208,208H160V152a8,8,0,0,0-8-8H104a8,8,0,0,0-8,8v56H48V120l80-80,80,80Z' },
+  moon: { r: 'M233.54,142.23a8,8,0,0,0-8-2,88.08,88.08,0,0,1-109.8-109.8,8,8,0,0,0-10-10,104.84,104.84,0,0,0-52.91,37A104,104,0,0,0,136,224a103.09,103.09,0,0,0,62.52-20.88,104.84,104.84,0,0,0,37-52.91A8,8,0,0,0,233.54,142.23ZM188.9,190.34A88,88,0,0,1,65.66,67.11a89,89,0,0,1,31.4-26A106,106,0,0,0,96,56,104.11,104.11,0,0,0,200,160a106,106,0,0,0,14.92-1.06A89,89,0,0,1,188.9,190.34Z' },
+  film: { r: 'M216,40H40A16,16,0,0,0,24,56V200a16,16,0,0,0,16,16H216a16,16,0,0,0,16-16V56A16,16,0,0,0,216,40ZM40,88h80v80H40Zm96-16V56h32V72Zm-16,0H88V56h32Zm0,112v16H88V184Zm16,0h32v16H136Zm0-16V88h80v80Zm80-96H184V56h32ZM72,56V72H40V56ZM40,184H72v16H40Zm176,16H184V184h32v16Z' },
+  power: { r: 'M120,128V48a8,8,0,0,1,16,0v80a8,8,0,0,1-16,0Zm60.37-78.7a8,8,0,0,0-8.74,13.4C194.74,77.77,208,101.57,208,128a80,80,0,0,1-160,0c0-26.43,13.26-50.23,36.37-65.3a8,8,0,0,0-8.74-13.4C47.9,67.38,32,96.06,32,128a96,96,0,0,0,192,0C224,96.06,208.1,67.38,180.37,49.3Z' },
+  timer: { r: 'M128,40a96,96,0,1,0,96,96A96.11,96.11,0,0,0,128,40Zm0,176a80,80,0,1,1,80-80A80.09,80.09,0,0,1,128,216ZM173.66,90.34a8,8,0,0,1,0,11.32l-40,40a8,8,0,0,1-11.32-11.32l40-40A8,8,0,0,1,173.66,90.34ZM96,16a8,8,0,0,1,8-8h48a8,8,0,0,1,0,16H104A8,8,0,0,1,96,16Z' },
+  menu: { r: 'M224,128a8,8,0,0,1-8,8H40a8,8,0,0,1,0-16H216A8,8,0,0,1,224,128ZM40,72H216a8,8,0,0,0,0-16H40a8,8,0,0,0,0,16ZM216,184H40a8,8,0,0,0,0,16H216a8,8,0,0,0,0-16Z' },
+  tag: { r: 'M243.31,136,144,36.69A15.86,15.86,0,0,0,132.69,32H40a8,8,0,0,0-8,8v92.69A15.86,15.86,0,0,0,36.69,144L136,243.31a16,16,0,0,0,22.63,0l84.68-84.68a16,16,0,0,0,0-22.63Zm-96,96L48,132.69V48h84.69L232,147.31ZM96,84A12,12,0,1,1,84,72,12,12,0,0,1,96,84Z' },
+  roof: { r: 'M240,208H224V136l2.34,2.34A8,8,0,0,0,237.66,127L139.31,28.68a16,16,0,0,0-22.62,0L18.34,127a8,8,0,0,0,11.32,11.31L32,136v72H16a8,8,0,0,0,0,16H240a8,8,0,0,0,0-16ZM48,120l80-80,80,80v88H160V152a8,8,0,0,0-8-8H104a8,8,0,0,0-8,8v56H48Zm96,88H112V160h32Z' },
+  plan: { r: 'M216,40H40A16,16,0,0,0,24,56V200a16,16,0,0,0,16,16H216a16,16,0,0,0,16-16V56A16,16,0,0,0,216,40Zm0,16V96H40V56ZM40,112H96v88H40Zm176,88H112V112H216v88Z' },
+  target: { r: 'M232,120h-8.34A96.14,96.14,0,0,0,136,32.34V24a8,8,0,0,0-16,0v8.34A96.14,96.14,0,0,0,32.34,120H24a8,8,0,0,0,0,16h8.34A96.14,96.14,0,0,0,120,223.66V232a8,8,0,0,0,16,0v-8.34A96.14,96.14,0,0,0,223.66,136H232a8,8,0,0,0,0-16Zm-96,87.6V200a8,8,0,0,0-16,0v7.6A80.15,80.15,0,0,1,48.4,136H56a8,8,0,0,0,0-16H48.4A80.15,80.15,0,0,1,120,48.4V56a8,8,0,0,0,16,0V48.4A80.15,80.15,0,0,1,207.6,120H200a8,8,0,0,0,0,16h7.6A80.15,80.15,0,0,1,136,207.6ZM128,88a40,40,0,1,0,40,40A40,40,0,0,0,128,88Zm0,64a24,24,0,1,1,24-24A24,24,0,0,1,128,152Z' },
+  pin: { r: 'M128,64a40,40,0,1,0,40,40A40,40,0,0,0,128,64Zm0,64a24,24,0,1,1,24-24A24,24,0,0,1,128,128Zm0-112a88.1,88.1,0,0,0-88,88c0,31.4,14.51,64.68,42,96.25a254.19,254.19,0,0,0,41.45,38.3,8,8,0,0,0,9.18,0A254.19,254.19,0,0,0,174,200.25c27.45-31.57,42-64.85,42-96.25A88.1,88.1,0,0,0,128,16Zm0,206c-16.53-13-72-60.75-72-118a72,72,0,0,1,144,0C200,161.23,144.53,209,128,222Z' },
+  panel: { r: 'M216,40H40A16,16,0,0,0,24,56V200a16,16,0,0,0,16,16H216a16,16,0,0,0,16-16V56A16,16,0,0,0,216,40ZM40,56H80V200H40ZM216,200H96V56H216V200Z' },
+  walk: { r: 'M152,80a32,32,0,1,0-32-32A32,32,0,0,0,152,80Zm0-48a16,16,0,1,1-16,16A16,16,0,0,1,152,32Zm64,112a8,8,0,0,1-8,8c-35.31,0-52.95-17.81-67.12-32.12-2.74-2.77-5.36-5.4-8-7.84l-13.43,30.88,37.2,26.57A8,8,0,0,1,160,176v56a8,8,0,0,1-16,0V180.12l-31.07-22.2L79.34,235.19A8,8,0,0,1,72,240a7.84,7.84,0,0,1-3.19-.67,8,8,0,0,1-4.15-10.52l54.08-124.37c-9.31-1.65-20.92,1.2-34.7,8.58a163.88,163.88,0,0,0-30.57,21.77,8,8,0,0,1-10.95-11.66c2.5-2.35,61.69-57.23,98.72-25.08,3.83,3.32,7.48,7,11,10.57C166.19,122.7,179.36,136,208,136A8,8,0,0,1,216,144Z' },
+  chevl: { r: 'M168.49,199.51a12,12,0,0,1-17,17l-80-80a12,12,0,0,1,0-17l80-80a12,12,0,0,1,17,17L97,128Z' },
+  chevr: { r: 'M184.49,136.49l-80,80a12,12,0,0,1-17-17L159,128,87.51,56.49a12,12,0,1,1,17-17l80,80A12,12,0,0,1,184.49,136.49Z' },
+  play: { r: 'M240,128a15.74,15.74,0,0,1-7.6,13.51L88.32,229.65a16,16,0,0,1-16.2.3A15.86,15.86,0,0,1,64,216.13V39.87a15.86,15.86,0,0,1,8.12-13.82,16,16,0,0,1,16.2.3L232.4,114.49A15.74,15.74,0,0,1,240,128Z' },
+  pause: { r: 'M216,48V208a16,16,0,0,1-16,16H160a16,16,0,0,1-16-16V48a16,16,0,0,1,16-16h40A16,16,0,0,1,216,48ZM96,32H56A16,16,0,0,0,40,48V208a16,16,0,0,0,16,16H96a16,16,0,0,0,16-16V48A16,16,0,0,0,96,32Z' },
+  more: { r: 'M144,128a16,16,0,1,1-16-16A16,16,0,0,1,144,128ZM60,112a16,16,0,1,0,16,16A16,16,0,0,0,60,112Zm136,0a16,16,0,1,0,16,16A16,16,0,0,0,196,112Z' },
+  close: { r: 'M208.49,191.51a12,12,0,0,1-17,17L128,145,64.49,208.49a12,12,0,0,1-17-17L111,128,47.51,64.49a12,12,0,0,1,17-17L128,111l63.51-63.52a12,12,0,0,1,17,17L145,128Z' },
+  sun: { r: 'M120,40V16a8,8,0,0,1,16,0V40a8,8,0,0,1-16,0Zm8,24a64,64,0,1,0,64,64A64.07,64.07,0,0,0,128,64ZM58.34,69.66A8,8,0,0,0,69.66,58.34l-16-16A8,8,0,0,0,42.34,53.66Zm0,116.68-16,16a8,8,0,0,0,11.32,11.32l16-16a8,8,0,0,0-11.32-11.32ZM192,72a8,8,0,0,0,5.66-2.34l16-16a8,8,0,0,0-11.32-11.32l-16,16A8,8,0,0,0,192,72Zm5.66,114.34a8,8,0,0,0-11.32,11.32l16,16a8,8,0,0,0,11.32-11.32ZM48,128a8,8,0,0,0-8-8H16a8,8,0,0,0,0,16H40A8,8,0,0,0,48,128Zm80,80a8,8,0,0,0-8,8v24a8,8,0,0,0,16,0V216A8,8,0,0,0,128,208Zm112-88H216a8,8,0,0,0,0,16h24a8,8,0,0,0,0-16Z' },
+  cloudsun: { r: 'M164,72a76.2,76.2,0,0,0-20.26,2.73,55.63,55.63,0,0,0-9.41-11.54l9.51-13.57a8,8,0,1,0-13.11-9.18L121.22,54A55.9,55.9,0,0,0,96,48c-.59,0-1.16,0-1.74,0L91.37,31.71a8,8,0,1,0-15.75,2.77L78.5,50.82A56.1,56.1,0,0,0,55.23,65.67L41.61,56.14a8,8,0,1,0-9.17,13.11L46,78.77A55.55,55.55,0,0,0,40,104c0,.57,0,1.15,0,1.72L23.71,108.6a8,8,0,0,0,1.38,15.88,8.24,8.24,0,0,0,1.39-.12l16.32-2.88a55.74,55.74,0,0,0,5.86,12.42A52,52,0,0,0,84,224h80a76,76,0,0,0,0-152ZM92.92,120.76a52.14,52.14,0,0,0-31,4.17,40,40,0,0,1,66.62-44.17A76.26,76.26,0,0,0,92.92,120.76Z' },
+  cloud: { r: 'M160.06,40A88.1,88.1,0,0,0,81.29,88.67h0A87.48,87.48,0,0,0,72,127.73,8.18,8.18,0,0,1,64.57,136,8,8,0,0,1,56,128a103.66,103.66,0,0,1,5.34-32.92,4,4,0,0,0-4.75-5.18A64.09,64.09,0,0,0,8,152c0,35.19,29.75,64,65,64H160a88.09,88.09,0,0,0,87.93-91.48C246.11,77.54,207.07,40,160.06,40Z' },
+  fog: { r: 'M168,232a8,8,0,0,1-8,8H104a8,8,0,0,1,0-16h56A8,8,0,0,1,168,232Zm-40-32a8,8,0,0,0-8-8H72a8,8,0,0,0,0,16h48A8,8,0,0,0,128,200Zm56-8H160a8,8,0,0,0,0,16h24a8,8,0,0,0,0-16Zm47.87-96.45a76,76,0,0,0-151.78.73A8.18,8.18,0,0,1,72,104l-.6,0A8.14,8.14,0,0,1,64,95.39a92.48,92.48,0,0,1,2.33-16.51,4,4,0,0,0-5-4.78A52.09,52.09,0,0,0,24,124.36C24.2,153.07,48.12,176,76.84,176H156A76.08,76.08,0,0,0,231.87,95.55Z' },
+  rain: { r: 'M158.66,196.44l-32,48a8,8,0,1,1-13.32-8.88l32-48a8,8,0,0,1,13.32,8.88ZM231.87,87.55a76,76,0,0,0-151.78.73A8.18,8.18,0,0,1,72,96l-.6,0A8.14,8.14,0,0,1,64,87.39a92.48,92.48,0,0,1,2.33-16.51,4,4,0,0,0-5-4.78A52.09,52.09,0,0,0,24,116.36C24.2,145.07,48.12,168,76.84,168h36.21L89.34,203.56a8,8,0,0,0,13.32,8.88L132.28,168H156A76.08,76.08,0,0,0,231.87,87.55Z' },
+  storm: { r: 'M156,168H132.53l-14.4,24H144a8,8,0,0,1,6.86,12.12l-24,40a8,8,0,0,1-13.72-8.24L129.87,208H104a8,8,0,0,1-6.86-12.12L113.87,168h-37C48.12,168,24.2,145.07,24,116.36A52.09,52.09,0,0,1,61.35,66.1a4,4,0,0,1,5,4.78A92.48,92.48,0,0,0,64,87.39,8.14,8.14,0,0,0,71.41,96l.6,0a8.18,8.18,0,0,0,8.08-7.72A76,76,0,1,1,156,168Z' },
+  snow: { r: 'M88,196a12,12,0,1,1-12-12A12,12,0,0,1,88,196Zm28,4a12,12,0,1,0,12,12A12,12,0,0,0,116,200Zm48-16a12,12,0,1,0,12,12A12,12,0,0,0,164,184ZM68,224a12,12,0,1,0,12,12A12,12,0,0,0,68,224Zm88,0a12,12,0,1,0,12,12A12,12,0,0,0,156,224ZM231.87,87.55a76,76,0,0,0-151.78.73A8.18,8.18,0,0,1,72,96l-.6,0A8.14,8.14,0,0,1,64,87.39a92.48,92.48,0,0,1,2.33-16.51,4,4,0,0,0-5-4.78A52.09,52.09,0,0,0,24,116.36C24.2,145.07,48.12,168,76.84,168H156A76.08,76.08,0,0,0,231.87,87.55Z' },
+  night: { r: 'M240,96a8,8,0,0,1-8,8H216v16a8,8,0,0,1-16,0V104H184a8,8,0,0,1,0-16h16V72a8,8,0,0,1,16,0V88h16A8,8,0,0,1,240,96ZM144,56h8v8a8,8,0,0,0,16,0V56h8a8,8,0,0,0,0-16h-8V32a8,8,0,0,0-16,0v8h-8a8,8,0,0,0,0,16Zm65.14,94.33A88.07,88.07,0,0,1,105.67,46.86a8,8,0,0,0-10.6-9.06A96,96,0,1,0,218.2,160.93a8,8,0,0,0-9.06-10.6Z' },
+  cloudnight: { r: 'M172,72a76.35,76.35,0,0,0-12.36,1A71.93,71.93,0,0,0,104.17,9.83a8,8,0,0,0-9.59,9.58A56.05,56.05,0,0,1,40,88a56.45,56.45,0,0,1-12.59-1.42,8,8,0,0,0-9.59,9.59,72.22,72.22,0,0,0,32.29,45.06A52,52,0,0,0,92,224h80a76,76,0,0,0,0-152ZM37.37,104c.87,0,1.75,0,2.63,0a72.08,72.08,0,0,0,72-72c0-.89,0-1.78,0-2.67a55.64,55.64,0,0,1,32,48.05A76.4,76.4,0,0,0,101,120.78a52.38,52.38,0,0,0-9-.78,51.69,51.69,0,0,0-30,9.59A56.22,56.22,0,0,1,37.37,104Z' },
+};
+
+// Códigos WMO (Open-Meteo) → ícone + descrição em pt-BR
+const WEATHER_CODE = {
+  0: ['sun', 'Céu limpo'], 1: ['cloudsun', 'Poucas nuvens'], 2: ['cloudsun', 'Parcialmente nublado'], 3: ['cloud', 'Nublado'],
+  45: ['fog', 'Neblina'], 48: ['fog', 'Neblina com geada'],
+  51: ['rain', 'Garoa fraca'], 53: ['rain', 'Garoa'], 55: ['rain', 'Garoa forte'],
+  56: ['rain', 'Garoa congelante'], 57: ['rain', 'Garoa congelante forte'],
+  61: ['rain', 'Chuva fraca'], 63: ['rain', 'Chuva'], 65: ['rain', 'Chuva forte'],
+  66: ['rain', 'Chuva congelante'], 67: ['rain', 'Chuva congelante forte'],
+  71: ['snow', 'Neve fraca'], 73: ['snow', 'Neve'], 75: ['snow', 'Neve forte'], 77: ['snow', 'Grãos de neve'],
+  80: ['rain', 'Pancadas fracas'], 81: ['rain', 'Pancadas de chuva'], 82: ['rain', 'Pancadas fortes'],
+  85: ['snow', 'Pancadas de neve fracas'], 86: ['snow', 'Pancadas de neve fortes'],
+  95: ['storm', 'Trovoada'], 96: ['storm', 'Trovoada com granizo'], 99: ['storm', 'Trovoada forte com granizo'],
+};
+
+// Cenas: ações compostas disparadas pelo cartão (não precisam existir no HA)
+const SCENES = [
+  { id: 'chegando', icon: 'home', name: 'Chegando em casa', desc: 'Acende garagem e área externa',
+    run: (c) => [c.on('garagem'), c.on('externa')] },
+  { id: 'piscina', icon: 'pool', name: 'Noite na piscina', desc: 'LED da piscina e luz externa; bomba desligada',
+    run: (c) => [c.on('led_piscina'), c.on('externa'), c.off('bomba_piscina')] },
+  { id: 'cinema', icon: 'film', name: 'Modo cinema', desc: 'TV ligada, luz do quarto apagada, LED roxo suave',
+    run: (c) => [c.call('media_player', 'turn_on', c.e('tv')), c.off('quarto'), c.call('light', 'turn_on', c.e('led_quarto'), { rgb_color: [120, 60, 220], brightness_pct: 25 })] },
+  { id: 'boanoite', icon: 'moon', name: 'Boa noite', desc: 'Apaga todas as luzes e desliga a TV',
+    run: (c) => ['quarto', 'led_quarto', 'sala', 'balcao', 'externa', 'banheiro', 'garagem', 'led_piscina'].map((k) => c.off(k)).concat([c.call('media_player', 'turn_off', c.e('tv'))]) },
+  { id: 'tudo', icon: 'power', name: 'Tudo desligado', desc: 'Luzes, TV, ar-condicionado e bomba',
+    run: (c) => ['quarto', 'led_quarto', 'sala', 'balcao', 'externa', 'banheiro', 'garagem', 'led_piscina', 'bomba_piscina'].map((k) => c.off(k)).concat([c.call('media_player', 'turn_off', c.e('tv')), c.call('climate', 'set_hvac_mode', c.e('ac'), { hvac_mode: 'off' })]) },
+];
+const LED_PRESETS = [['Quente', [255, 180, 110]], ['Branco', [255, 244, 229]], ['Vermelho', [255, 40, 40]], ['Azul', [40, 110, 255]], ['Verde', [40, 200, 90]], ['Roxo', [140, 60, 230]]];
+const HVAC_PT = { off: 'Desligado', cool: 'Frio', heat: 'Quente', heat_cool: 'Auto', auto: 'Auto', fan_only: 'Ventilar', dry: 'Seco' };
+const MEDIA_PT = { playing: 'Tocando', paused: 'Pausado', idle: 'Ociosa', off: 'Desligada', standby: 'Standby', on: 'Ligada', unavailable: 'indisponível', unknown: '—' };
+// Elevação/azimute do sol para uma data e um ponto (graus). Azimute: 0 = norte, 90 = leste.
+function solarPosition(date, lat, lon) {
+  const rad = Math.PI / 180;
+  const d = date.getTime() / 86400000 - 10957.5;
+  const g = ((357.529 + 0.98560028 * d) % 360) * rad;
+  const q = (280.459 + 0.98564736 * d) % 360;
+  const L = ((q + 1.915 * Math.sin(g) + 0.02 * Math.sin(2 * g)) % 360) * rad;
+  const e = (23.439 - 0.00000036 * d) * rad;
+  const RA = Math.atan2(Math.cos(e) * Math.sin(L), Math.cos(L)) / rad;
+  const dec = Math.asin(Math.sin(e) * Math.sin(L));
+  const gmst = ((18.697374558 + 24.06570982441908 * d) % 24 + 24) % 24;
+  let H = ((gmst * 15 + lon - RA) % 360 + 540) % 360 - 180;
+  const Hr = H * rad, la = lat * rad;
+  const alt = Math.asin(Math.sin(la) * Math.sin(dec) + Math.cos(la) * Math.cos(dec) * Math.cos(Hr));
+  const az = Math.atan2(-Math.sin(Hr), Math.tan(dec) * Math.cos(la) - Math.sin(la) * Math.cos(Hr));
+  return { elevation: alt / rad, azimuth: (az / rad + 360) % 360 };
+}
+function fmtClock(ts) { try { return new Date(ts).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }); } catch (_) { return ''; } }
+function fmtRel(ts, now = Date.now()) {   // espaços inseparáveis: "há 3 d" nunca quebra no meio
+  const d = Math.max(0, (now - new Date(ts).getTime()) / 1000);
+  if (d < 45) return 'agora'; if (d < 3600) return `há\u00a0${Math.round(d / 60)}\u00a0min`; if (d < 86400) return `há\u00a0${Math.round(d / 3600)}\u00a0h`;
+  const days = Math.round(d / 86400); return days === 1 ? 'ontem' : `há\u00a0${days}\u00a0d`;
+}
+const iconSvg = (k, i = ICONS[k] || ICONS.bulb) => `<svg viewBox="0 0 256 256" width="15" height="15" fill="currentColor" aria-hidden="true"><path${i.f ? ' class="r"' : ''} d="${i.r}"/>${i.f ? `<path class="f" d="${i.f}"/>` : ''}</svg>`;   // r = regular (desligado), f = fill (ligado; o CSS troca)
+
+// ---------------------------------------------------------------------------
+// Planta (metros). Aproximada a partir do render do Sweet Home 3D.
+// Cada zona = piso clicável; `item` = qual luz o clique alterna.
+// ---------------------------------------------------------------------------
+const H = 2.8;      // pé-direito
+const T = 0.15;     // espessura das paredes
+
+const ZONES = {
+  quarto_casal: { x: 0,    z: 0,    w: 3.6,  d: 4.2, color: 0xb18b5f, label: 'Quarto Casal', lp: [1.8, 2.9] },
+  quarto:       { x: 3.6,  z: 0,    w: 3.2,  d: 4.2, color: 0xb18b5f, label: 'Quarto',        lp: [5.2, 1.2], item: 'quarto' },
+  sala:         { x: 6.8,  z: 0,    w: 3.5,  d: 4.2, color: 0xd8d3c6, label: 'Sala / Cozinha', lp: [8.5, 2.9], item: 'sala' },
+  balcao:       { x: 10.3, z: 0,    w: 2.2,  d: 4.2, color: 0xd8d3c6, label: 'Balcão',        lp: [11.4, 1.2], item: 'balcao' },
+  varanda:      { x: 0,    z: 4.2,  w: 12.5, d: 2.0, color: 0xc6bda8, label: 'Varanda',       lp: [6.25, 5.2], item: 'externa' },
+  banheiro:     { x: 0,    z: 6.2,  w: 2.4,  d: 2.6, color: 0xcfd7da, label: 'Banheiro',      lp: [1.2, 7.5], item: 'banheiro' },
+  dispensa:     { x: 0,    z: 8.8,  w: 2.4,  d: 1.8, color: 0xcbc4b6, label: 'Dispensa',      lp: [1.2, 9.7], item: 'banheiro' },
+  garagem:      { x: 0,    z: 10.6, w: 3.0,  d: 5.4, color: 0x7e7e7a, label: 'Garagem',       lp: [1.5, 13.3], item: 'garagem' },
+  jardim:       { x: 10.9, z: 6.2,  w: 2.5,  d: 6.2, color: 0x41603a, label: 'Jardim',        lp: [12.15, 9.4], item: 'externa' },
+  patio:        { x: 2.4,  z: 12.4, w: 11.0, d: 3.6, color: 0x66655f, label: null,            item: 'externa' },
+};
+const POOL  = { x0: 3.9, x1: 8.3, zc: 9.8, r: 1.6, depth: 1.4 };   // reta de x0→x1 + meia-lua de raio r
+const DECK  = { x: 2.9, z: 7.2, w: 8.0, d: 5.2 };
+const LOT   = { w: 13.4, d: 16.0 };
+// Visão de pessoa: área onde dá para andar (só o lote; sem rua nem calçada desde a v1.5.1)
+const WALK  = { x0: 0, x1: LOT.w, z0: 0, z1: LOT.d };
+// dentro da piscina (reta x0→x1 + meia-lua de raio r), com folga g — a pessoa contorna a água
+const inPool = (x, z, g = 0) => (x >= POOL.x0 - g && x <= POOL.x1 && Math.abs(z - POOL.zc) <= POOL.r + g) || Math.hypot(x - POOL.x1, z - POOL.zc) <= POOL.r + g;
+// Cômodos para o bonequinho e o "Ir para…": [x, z, w, d] no piso; `zone` reaproveita o retângulo de ZONES
+const zr = (id) => [ZONES[id].x, ZONES[id].z, ZONES[id].w, ZONES[id].d];
+const PLACES = [
+  { id: 'casa', label: 'Casa', rooms: [
+    { id: 'quarto_casal', label: 'Quarto Casal', rects: [zr('quarto_casal')] },
+    { id: 'quarto', label: 'Quarto', rects: [zr('quarto')] },
+    { id: 'sala', label: 'Sala / Cozinha', rects: [zr('sala')] },
+    { id: 'balcao', label: 'Balcão', rects: [zr('balcao')] },
+    { id: 'varanda', label: 'Varanda', rects: [zr('varanda')] }] },
+  { id: 'fundos', label: 'Área externa', rooms: [
+    { id: 'piscina', label: 'Piscina', rects: [[DECK.x, DECK.z, DECK.w, DECK.d]] },
+    { id: 'jardim', label: 'Jardim', rects: [zr('jardim')] },
+    { id: 'quintal', label: 'Quintal', rects: [[3.0, 12.4, 10.4, 3.6]] },
+    { id: 'banheiro', label: 'Banheiro', rects: [zr('banheiro')] },
+    { id: 'dispensa', label: 'Dispensa', rects: [zr('dispensa')] },
+    { id: 'garagem', label: 'Garagem', rects: [zr('garagem')] }] },
+];
+
+// ---------------------------------------------------------------------------
+// Utilidades
+// ---------------------------------------------------------------------------
+const clamp = THREE.MathUtils.clamp;
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+// ---------------------------------------------------------------------------
+// up! TSI Pepper do modelo 3D "VolksWagen UP!" de esprit3d.website (Sketchfab, CC BY 4.0), já limpo e recolorido
+// em modelos/up-tsi.bin: grupos por material, posição Int16 na caixa, normal Int8, índices u16/u32. Frente em -z, origem no chão.
+// ---------------------------------------------------------------------------
+/* global TextDecoder, URL */
+function upModelo(buf, paint) {
+  const [mag, hl] = new Uint32Array(buf, 0, 2);
+  if (mag !== 0x32435055) throw new Error('up-tsi.bin inválido');
+  const head = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 8, hl)));
+  const [lo, ext] = head.box;
+  const M = (o) => new THREE.MeshStandardMaterial(o);
+  const canvas = (w, h, draw) => { const c = document.createElement('canvas'); c.width = w; c.height = h; draw(c.getContext('2d')); const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t; };
+  const placa = canvas(512, 160, (x) => {   // placa Mercosul genérica
+    x.fillStyle = '#f6f6f3'; x.fillRect(0, 0, 512, 160); x.fillStyle = '#1f4fa3'; x.fillRect(0, 0, 512, 34);
+    x.fillStyle = '#fff'; x.font = 'bold 24px Arial'; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText('BRASIL', 256, 17);
+    x.fillStyle = '#151515'; x.font = 'bold 96px Arial'; x.fillText('UPT 5I19', 256, 100);
+  });
+  const colmeia = canvas(512, 128, (x) => {   // grade inferior do Pepper: colmeia preta
+    x.fillStyle = '#0d0e0f'; x.fillRect(0, 0, 512, 128); x.strokeStyle = '#25282c'; x.lineWidth = 3;
+    for (let r = 0; r * 11 < 140; r++) for (let c = -1; c * 16 < 530; c++) { const cx = c * 16 + (r % 2) * 8, cy = r * 11; x.beginPath(); x.moveTo(cx - 7, cy); x.lineTo(cx, cy - 6); x.lineTo(cx + 7, cy); x.lineTo(cx, cy + 6); x.closePath(); x.stroke(); }
+    x.fillStyle = '#1b1c1e'; x.fillRect(0, 0, 512, 7); x.fillRect(0, 121, 512, 7);   // moldura
+  });
+  const MAT = {
+    pintura: new THREE.MeshPhysicalMaterial({ color: paint, roughness: 0.32, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.04 }),   // branco sólido com verniz
+    vermelho: M({ color: 0xd3121b, roughness: 0.25 }),
+    liga: M({ color: 0x3b3e43, metalness: 0.75, roughness: 0.32 }),
+    preto: M({ color: 0x141516, roughness: 0.7 }),
+    pretoBrilho: M({ color: 0x08090a, roughness: 0.15 }),
+    metal: M({ color: 0x8a8d90, metalness: 0.8, roughness: 0.4 }),
+    cromado: M({ color: 0xdfe3e8, metalness: 1, roughness: 0.12 }),
+    vidro: M({ color: 0x0b1015, roughness: 0.05, metalness: 0.1 }),
+    lente: M({ color: 0xffffff, roughness: 0.02, metalness: 0, transparent: true, opacity: 0.16, depthWrite: false }),   // farol transparente: o refletor cromado aparece por dentro
+    ambar: M({ color: 0xd98a1c, roughness: 0.3 }),
+    lanterna: M({ color: 0x9c0f14, roughness: 0.2, emissive: 0x2a0004 }),
+    placa: M({ map: placa, roughness: 0.4 }),
+    grade: M({ map: colmeia, roughness: 0.55 }),
+  };
+  const g = new THREE.Group();
+  let o = 8 + hl, corpo = null;
+  const al = () => { o = (o + 3) & ~3; };
+  for (const e of head.grupos) {
+    const q = new Uint16Array(buf, o, e.vc * 3); o += e.vc * 6; al();
+    const pos = new Float32Array(e.vc * 3);
+    for (let i = 0; i < pos.length; i++) pos[i] = lo[i % 3] + (q[i] / 65535) * ext[i % 3];
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('normal', new THREE.BufferAttribute(new Int8Array(buf, o, e.vc * 3), 3, true)); o += e.vc * 3; al();
+    if (e.uv) { geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(buf, o, e.vc * 2), 2)); o += e.vc * 8; }
+    geo.setIndex(new THREE.BufferAttribute(e.big ? new Uint32Array(buf, o, e.ic) : new Uint16Array(buf, o, e.ic), 1)); o += e.ic * (e.big ? 4 : 2); al();
+    const m = new THREE.Mesh(geo, MAT[e.k] || MAT.preto);
+    m.castShadow = !['vidro', 'lente', 'placa', 'ambar', 'lanterna', 'vermelho', 'grade'].includes(e.k);
+    m.receiveShadow = true;
+    g.add(m);
+    if (e.k === 'pintura') corpo = m;
+  }
+  // adesivo PEPPER na porta dianteira, colado na lateral pelo raio
+  if (corpo) {
+    const pep = new THREE.MeshStandardMaterial({ roughness: 0.3, map: canvas(512, 96, (x) => {
+      x.fillStyle = '#' + new THREE.Color(paint).getHexString(); x.fillRect(0, 0, 512, 96);   // fundo da cor da pintura: sem transparência
+      x.fillStyle = '#c8101a'; x.font = 'italic 900 78px Arial'; x.textAlign = 'center'; x.textBaseline = 'middle'; x.fillText('PEPPER', 232, 50);
+      x.beginPath(); x.moveTo(384, 34); x.lineTo(426, 48); x.lineTo(384, 62); x.fill();
+    }) });
+    const ray = new THREE.Raycaster(), Z = new THREE.Vector3(0, 0, 1);
+    for (const sx of [-1, 1]) {
+      ray.set(new THREE.Vector3(sx * 2, 0.70, -0.42), new THREE.Vector3(-sx, 0, 0));
+      const h = ray.intersectObject(corpo, false)[0];
+      if (!h) continue;
+      const n = h.face.normal.clone().transformDirection(corpo.matrixWorld);
+      const d = new THREE.Mesh(new THREE.PlaneGeometry(0.30, 0.056), pep);
+      d.position.copy(h.point).addScaledVector(n, 0.004);
+      d.quaternion.setFromUnitVectors(Z, n);
+      g.add(d);
+    }
+  }
+  return g;
+}
+
+// ---------------------------------------------------------------------------
+// Texturas procedurais (canvas) — nada externo para baixar
+// ---------------------------------------------------------------------------
+function makeTex(size, draw, repeat = [1, 1]) {
+  const c = document.createElement('canvas'); c.width = c.height = size;
+  const g = c.getContext('2d'); draw(g, size);
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(repeat[0], repeat[1]);
+  t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+  return t;
+}
+function grain(g, size, seed, count, alpha, tint = [255, 255, 255]) {
+  const rnd = mulberry32(seed);
+  for (let i = 0; i < count; i++) {
+    const v = rnd(); const c = tint.map((x) => Math.floor(x * (0.5 + v)));
+    g.fillStyle = `rgba(${c[0]},${c[1]},${c[2]},${(rnd() * alpha).toFixed(3)})`;
+    g.fillRect(rnd() * size, rnd() * size, 1 + rnd() * 2.5, 1 + rnd() * 2.5);
+  }
+}
+function shade(hex, v) {
+  const r = (hex >> 16) & 255, gg = (hex >> 8) & 255, b = hex & 255;
+  return `rgb(${Math.min(255, r * v) | 0},${Math.min(255, gg * v) | 0},${Math.min(255, b * v) | 0})`;
+}
+const TEX = {};
+function textures() {
+  if (TEX.wood) return TEX;
+  // Tábuas de madeira (6 por bloco de 2,4 m)
+  TEX.wood = makeTex(512, (g, s) => {
+    const rnd = mulberry32(5), ph = s / 6;
+    for (let r = 0; r < 6; r++) {
+      const y = r * ph, v = 0.86 + rnd() * 0.26;
+      g.fillStyle = shade(0xb98d5c, v); g.fillRect(0, y, s, ph);
+      g.strokeStyle = 'rgba(70,40,15,0.16)'; g.lineWidth = 1;
+      for (let k = 0; k < 26; k++) {
+        const yy = y + rnd() * ph; g.beginPath(); g.moveTo(0, yy);
+        for (let x = 0; x <= s; x += 24) g.lineTo(x, yy + Math.sin(x / 60 + k) * 1.6 + (rnd() - 0.5));
+        g.stroke();
+      }
+      g.fillStyle = 'rgba(45,28,12,0.6)'; g.fillRect(0, y, s, 2);
+      g.fillRect(((r % 2) * s / 2 + rnd() * 60) % s, y, 2, ph);
+    }
+    grain(g, s, 9, 5000, 0.08, [120, 80, 40]);
+  });
+  const tiles = (base, grout, n, seed) => makeTex(256, (g, s) => {
+    g.fillStyle = grout; g.fillRect(0, 0, s, s);
+    const rnd = mulberry32(seed), t = s / n;
+    for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) { g.fillStyle = shade(base, 0.93 + rnd() * 0.1); g.fillRect(i * t + 1.5, j * t + 1.5, t - 3, t - 3); }
+    grain(g, s, seed + 1, 2500, 0.05);
+  });
+  TEX.tileWarm = tiles(0xe0dacc, '#b8b09f', 4, 2);   // porcelanato bege (sala/cozinha)
+  TEX.tileCool = tiles(0xd7e0e3, '#9fadb3', 6, 3);   // banheiro
+  TEX.tileTerra = tiles(0xc9b191, '#9d8664', 3, 4);  // varanda
+  TEX.concrete = makeTex(256, (g, s) => { g.fillStyle = '#818079'; g.fillRect(0, 0, s, s); grain(g, s, 6, 22000, 0.22, [90, 90, 88]); grain(g, s, 7, 3000, 0.12, [200, 200, 196]); });
+  TEX.asphalt = makeTex(256, (g, s) => { g.fillStyle = '#66655d'; g.fillRect(0, 0, s, s); grain(g, s, 8, 22000, 0.25, [60, 60, 56]); });
+  TEX.grass = makeTex(256, (g, s) => {
+    g.fillStyle = '#3c5c2f'; g.fillRect(0, 0, s, s);
+    const rnd = mulberry32(12);
+    for (let i = 0; i < 9000; i++) { const v = 0.75 + rnd() * 0.6; g.fillStyle = shade(0x4a7038, v); g.fillRect(rnd() * s, rnd() * s, 1, 2 + rnd() * 3); }
+    grain(g, s, 13, 2000, 0.1, [30, 50, 20]);
+  });
+  TEX.pavers = makeTex(256, (g, s) => {
+    g.fillStyle = '#a89373'; g.fillRect(0, 0, s, s);
+    const rnd = mulberry32(21), w = s / 2, h = s / 4;
+    for (let r = 0; r < 4; r++) for (let c = -1; c < 3; c++) { const x = c * w + (r % 2) * w / 2; g.fillStyle = shade(0xd2bc93, 0.92 + rnd() * 0.14); g.fillRect(x + 2, r * h + 2, w - 4, h - 4); }
+    grain(g, s, 22, 4000, 0.08, [120, 100, 70]);
+  });
+  TEX.plaster = makeTex(256, (g, s) => { g.fillStyle = '#e8e2d6'; g.fillRect(0, 0, s, s); grain(g, s, 31, 9000, 0.07, [120, 110, 100]); }, [2, 1]);
+  // Normal map de ondulação (senos com frequências inteiras → azulejável)
+  TEX.waterNormal = (() => {
+    const s = 512, c = document.createElement('canvas'); c.width = c.height = s; const g = c.getContext('2d');
+    const img = g.createImageData(s, s);
+    const W = [[3, 1, 0.5, 0.0], [1, -4, 0.35, 1.3], [6, 6, 0.16, 0.7], [-5, 7, 0.14, 2.1], [9, -2, 0.09, 0.4], [2, 11, 0.07, 3.0], [-12, 5, 0.05, 1.9], [14, 13, 0.035, 0.9]];
+    const hgt = (x, y) => { const u = (x / s) * Math.PI * 2, v = (y / s) * Math.PI * 2; let h = 0; for (const [a, b, amp, ph] of W) h += Math.sin(u * a + v * b + ph) * amp; return h; };
+    for (let y = 0; y < s; y++) for (let x = 0; x < s; x++) {
+      const dx = hgt(x + 1, y) - hgt(x - 1, y), dy = hgt(x, y + 1) - hgt(x, y - 1);
+      const nx = -dx * 7, ny = -dy * 7, nz = 1, l = Math.hypot(nx, ny, nz), i = (y * s + x) * 4;
+      img.data[i] = (nx / l * 0.5 + 0.5) * 255; img.data[i + 1] = (ny / l * 0.5 + 0.5) * 255; img.data[i + 2] = (nz / l * 0.5 + 0.5) * 255; img.data[i + 3] = 255;
+    }
+    g.putImageData(img, 0, 0);
+    const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.colorSpace = THREE.NoColorSpace; t.anisotropy = 4; return t;
+  })();
+  // Cáusticas (traçado claro sobre fundo neutro) para o fundo/paredes da piscina
+  TEX.caustics = makeTex(256, (g, s) => {
+    g.fillStyle = '#000'; g.fillRect(0, 0, s, s);
+    g.strokeStyle = 'rgba(255,255,255,0.9)'; g.lineWidth = 2.2; g.lineJoin = 'round';
+    const rnd = mulberry32(19);
+    for (let i = 0; i < 30; i++) {
+      const cx = rnd() * s, cy = rnd() * s, r = 9 + rnd() * 24, k = 2 + Math.floor(rnd() * 3), ph = rnd() * 6;
+      for (const ox of [-s, 0, s]) for (const oy of [-s, 0, s]) {
+        g.beginPath();
+        for (let a = 0; a <= Math.PI * 2 + 0.05; a += 0.2) { const rr = r * (0.78 + 0.28 * Math.sin(a * k + ph)); const x = cx + ox + Math.cos(a) * rr, y = cy + oy + Math.sin(a) * rr; a === 0 ? g.moveTo(x, y) : g.lineTo(x, y); }
+        g.stroke();
+      }
+    }
+  });
+  TEX.glow = makeTex(128, (g, s) => {
+    const r = g.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+    r.addColorStop(0, 'rgba(255,255,255,1)'); r.addColorStop(0.25, 'rgba(255,255,255,0.55)'); r.addColorStop(0.6, 'rgba(255,255,255,0.12)'); r.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = r; g.fillRect(0, 0, s, s);
+  });
+  TEX.glow.wrapS = TEX.glow.wrapT = THREE.ClampToEdgeWrapping;
+  TEX.skyDay = makeTex(256, (g, s) => { const r = g.createLinearGradient(0, s, 0, 0); r.addColorStop(0, '#e6eef6'); r.addColorStop(0.18, '#b7d3ee'); r.addColorStop(0.6, '#5f9bdc'); r.addColorStop(1, '#3f7fc9'); g.fillStyle = r; g.fillRect(0, 0, s, s); });
+  TEX.skyDusk = makeTex(256, (g, s) => { const r = g.createLinearGradient(0, s, 0, 0); r.addColorStop(0, '#ffb070'); r.addColorStop(0.12, '#f0805a'); r.addColorStop(0.3, '#8a5a8c'); r.addColorStop(0.6, '#26357a'); r.addColorStop(1, '#0d1540'); g.fillStyle = r; g.fillRect(0, 0, s, s); });
+  TEX.skyNight = makeTex(256, (g, s) => { const r = g.createLinearGradient(0, s, 0, 0); r.addColorStop(0, '#d98558'); r.addColorStop(0.05, '#a8607a'); r.addColorStop(0.13, '#3a4690'); r.addColorStop(0.35, '#17265f'); r.addColorStop(0.7, '#0b1440'); r.addColorStop(1, '#060b26'); g.fillStyle = r; g.fillRect(0, 0, s, s); });   // noite de entardecer: azul-profundo com faixa quente no horizonte
+  for (const k of ['skyDay', 'skyNight', 'skyDusk']) { TEX[k].wrapS = TEX[k].wrapT = THREE.ClampToEdgeWrapping; }
+  return TEX;
+}
+
+const MAT = {};
+function materials() {
+  if (MAT.wall) return MAT;
+  const T = textures();
+  const std = (o) => new THREE.MeshStandardMaterial(Object.assign({ roughness: 0.9, metalness: 0 }, o));
+  MAT.wall     = std({ color: 0xf0eadf, map: T.plaster, roughness: 0.95 });
+  MAT.lowWall  = std({ color: 0xd6ccb8, map: T.plaster, roughness: 0.95 });
+  MAT.deck     = std({ color: 0xf2e6cf, map: T.pavers, roughness: 0.95 });
+  MAT.deck.map = T.pavers.clone(); MAT.deck.map.repeat.set(1 / 1.6, 1 / 1.6);
+  MAT.basin    = std({ color: 0xa9d3ea, roughness: 0.55, emissive: 0x9fd8ff, emissiveMap: T.caustics.clone(), emissiveIntensity: 0.12 });
+  MAT.basin.emissiveMap.repeat.set(0.6, 0.6);
+  MAT.door     = std({ color: 0x6e4b33, roughness: 0.75 });
+  MAT.doorPanel = std({ color: 0x5a3b28, roughness: 0.75 });
+  MAT.baseboard = std({ color: 0xf4f1ea, roughness: 0.7 });
+  MAT.glass    = new THREE.MeshPhysicalMaterial({ color: 0xe6f3ff, transparent: true, opacity: 0.16, roughness: 0.02, metalness: 0, envMapIntensity: 0.55, side: THREE.DoubleSide, depthWrite: false });
+  MAT.wood     = std({ color: 0xa5692a, roughness: 0.7 });
+  MAT.woodLite = std({ color: 0x8a6a3f, roughness: 0.7 });
+  MAT.white    = std({ color: 0xe9ebee, roughness: 0.6 });
+  MAT.steel    = std({ color: 0xcfd4d8, roughness: 0.35, metalness: 0.6 });
+  MAT.dark     = std({ color: 0x262626, roughness: 0.6 });
+  MAT.mattress = std({ color: 0xd9d5cf });
+  MAT.red      = std({ color: 0x8b2f2f });
+  MAT.blue     = std({ color: 0x7ea6c9 });
+  MAT.tan      = std({ color: 0xb0a080 });
+  MAT.chair    = std({ color: 0x5a4a3a });
+  MAT.plant    = std({ color: 0x2f6b34, roughness: 1 });
+  MAT.pot      = std({ color: 0x7a5236 });
+  MAT.car      = std({ color: 0x3b4a6b, roughness: 0.4, metalness: 0.3 });
+  MAT.tire     = std({ color: 0x151515 });
+  MAT.fixture  = std({ color: 0xf2efe8, roughness: 0.5 });
+  MAT.pump     = std({ color: 0x6b7280, roughness: 0.6, metalness: 0.2 });
+  MAT.woodDark = std({ color: 0x5a3f2c, roughness: 0.7 });
+  MAT.frame    = std({ color: 0xf7f4ee, roughness: 0.6 });
+  MAT.wallCap  = std({ color: 0xd4cdbf, roughness: 0.9 });
+  MAT.cushion  = std({ color: 0xe6dfd3, roughness: 0.95 });
+  MAT.navy     = std({ color: 0x3b4a6b, roughness: 0.9 });
+  MAT.leaf2    = std({ color: 0x3f7d3a, roughness: 1 });
+  MAT.trunk    = std({ color: 0x6b4a2f, roughness: 1 });
+  MAT.soil     = std({ color: 0x3d2b1c, roughness: 1 });
+  MAT.chrome   = std({ color: 0xdfe3e8, roughness: 0.25, metalness: 0.9 });
+  MAT.glassDark = new THREE.MeshPhysicalMaterial({ color: 0x2a3a4a, transparent: true, opacity: 0.55, roughness: 0.1, metalness: 0.2 });
+  MAT.mirror   = std({ color: 0xdfe6ee, roughness: 0.05, metalness: 1 });
+  MAT.screenOff = std({ color: 0x0b0b0b, emissive: 0x1d3350, emissiveIntensity: 0.35, roughness: 0.3 });
+  MAT.lightRed = std({ color: 0xff3b3b, emissive: 0xff2a2a, emissiveIntensity: 0.6 });
+  MAT.lightWhite = std({ color: 0xfff6dd, emissive: 0xfff2cc, emissiveIntensity: 0.5 });
+  MAT.book     = [0x8b2f2f, 0x2f5f8b, 0x3f7d3a, 0xc9a24a, 0x6b4a2f, 0xe6dfd3].map((c) => std({ color: c, roughness: 0.9 }));
+  return MAT;
+}
+
+// ---------------------------------------------------------------------------
+// Look 'maquete' (estilo premium minimalista): pisos de tábua larga/pedra clara, paredes off-white lisas, esquadrias pretas finas,
+// vidro com leve tom verde, paleta creme · carvalho · nogueira · verde-sálvia · terracota. Só troca materiais (o layout não muda).
+// ---------------------------------------------------------------------------
+const MAQ = {};
+function maqTextures() {
+  if (MAQ.oak) return MAQ;
+  // tábuas largas: n fileiras por bloco; emendas alternadas, veio suave, variação de tom entre tábuas
+  const planks = (seed, base, n, vari, joint) => makeTex(512, (g, s) => {
+    const rnd = mulberry32(seed), ph = s / n;
+    for (let r = 0; r < n; r++) {
+      const y = r * ph, cut = rnd() * s * 0.7 + s * 0.15;
+      for (const [x0, x1] of [[0, cut], [cut, s]]) {
+        g.fillStyle = shade(base, 1 - vari / 2 + rnd() * vari); g.fillRect(x0, y, x1 - x0, ph);
+        g.strokeStyle = 'rgba(90,60,30,0.10)'; g.lineWidth = 1;
+        for (let k = 0; k < 7; k++) { const yy = y + rnd() * ph; g.beginPath(); g.moveTo(x0, yy); for (let x = x0; x <= x1; x += 32) g.lineTo(x, yy + Math.sin(x / 70 + k) * 1.2); g.stroke(); }
+        g.fillStyle = joint; g.fillRect(x0, y, 1.5, ph);
+      }
+      g.fillStyle = joint; g.fillRect(0, y, s, 1.5);
+    }
+    grain(g, s, seed + 3, 1400, 0.05, [140, 100, 60]);
+  });
+  MAQ.oak = planks(31, 0xd2b183, 10, 0.1, 'rgba(110,80,45,0.38)');      // carvalho claro, ~24 cm por tábua
+  MAQ.deck = planks(37, 0xb88e5a, 16, 0.16, 'rgba(60,38,18,0.5)');      // deck de madeira (tábuas estreitas)
+  MAQ.stone = makeTex(512, (g, s) => {                                    // porcelanato/pedra clara em placas grandes
+    const rnd = mulberry32(41); g.fillStyle = '#e6dfd2'; g.fillRect(0, 0, s, s);
+    for (let i = 0; i < 4; i++) { const x = (i % 2) * s / 2, y = (i >> 1) * s / 2; g.fillStyle = shade(0xe6dfd2, 0.96 + rnd() * 0.07); g.fillRect(x, y, s / 2, s / 2); }
+    g.strokeStyle = 'rgba(150,135,110,0.16)'; g.lineWidth = 2;
+    for (let k = 0; k < 22; k++) { g.beginPath(); let x = rnd() * s, y = rnd() * s; g.moveTo(x, y); for (let j = 0; j < 5; j++) { x += (rnd() - 0.3) * 60; y += (rnd() - 0.5) * 50; g.lineTo(x, y); } g.stroke(); }
+    g.fillStyle = 'rgba(120,105,85,0.55)'; g.fillRect(0, 0, s, 2); g.fillRect(0, 0, 2, s); g.fillRect(s / 2, 0, 1.5, s); g.fillRect(0, s / 2, s, 1.5);
+    grain(g, s, 43, 900, 0.04, [160, 145, 120]);
+  });
+  return MAQ;
+}
+function applyMaquete(M) {
+  if (M._maq) return M; M._maq = true;
+  const Q = maqTextures();
+  const set = (m, o) => { for (const k in o) { if (k === 'color' || k === 'emissive') m[k].set(o[k]); else m[k] = o[k]; } m.needsUpdate = true; };
+  set(M.wall, { map: null, color: 0xefebe3, roughness: 0.92 });
+  set(M.lowWall, { map: null, color: 0xe7e0d3, roughness: 0.92 });
+  set(M.wallCap, { color: 0xe6d8b9, roughness: 0.85 });          // topo do corte: creme
+  set(M.baseboard, { color: 0xf3eee5 });
+  set(M.frame, { color: 0x15171b, roughness: 0.45, metalness: 0.2 });   // esquadria preta fosca
+  set(M.glass, { color: 0xc8e6d6, opacity: 0.2 });                        // vidro com leve tom verde
+  set(M.door, { color: 0x7a5a3f, roughness: 0.6 }); set(M.doorPanel, { color: 0x6c4e36, roughness: 0.6 });
+  set(M.wood, { color: 0xcfa66f, roughness: 0.62 }); set(M.woodLite, { color: 0xdcc093, roughness: 0.6 }); set(M.woodDark, { color: 0x5c3d2a, roughness: 0.6 });
+  set(M.white, { color: 0xf4f0e9 }); set(M.fixture, { color: 0xf6f1e8 }); set(M.cushion, { color: 0xe9e0d0 }); set(M.mattress, { color: 0xf1ece3 });
+  set(M.navy, { color: 0x7a8468 }); set(M.blue, { color: 0x97a487 }); set(M.red, { color: 0xb26a4b }); set(M.tan, { color: 0xc9b596 }); set(M.chair, { color: 0xb78f61 });
+  set(M.dark, { color: 0x1c1c1f }); set(M.pot, { color: 0xb8a48b }); set(M.leaf2, { color: 0x58824d });
+  const dk = M.deck.map; set(M.deck, { map: Q.deck.clone(), color: 0xffffff }); M.deck.map.repeat.set(1 / 2.4, 1 / 2.4); M.deck.map.needsUpdate = true; if (dk && dk.dispose) dk.dispose();
+  set(M.basin, { color: 0x71d6cd, emissive: 0x3fe3d3 });          // piscina turquesa
+  return M;
+}
+
+function box(w, h, d, mat, x, y, z, opts = {}) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+  m.position.set(x, y, z);
+  m.castShadow = opts.cast !== false;
+  m.receiveShadow = opts.receive !== false;
+  return m;
+}
+
+// ---------------------------------------------------------------------------
+// Água da piscina: shader próprio (ondas animadas, Fresnel, brilho do sol,
+// cor por profundidade, espuma na borda). Uma malha, três texturas — leve.
+// ---------------------------------------------------------------------------
+const WATER_VERT = `
+  varying vec3 vWorld;
+  #include <fog_pars_vertex>
+  void main() {
+    vec4 wp = modelMatrix * vec4(position, 1.0);
+    vWorld = wp.xyz;
+    vec4 mvPosition = viewMatrix * wp;
+    gl_Position = projectionMatrix * mvPosition;
+    #include <fog_vertex>
+  }`;
+const WATER_FRAG = `
+  uniform float time;
+  uniform sampler2D normalMap;
+  uniform sampler2D caustic;
+  uniform vec3 sunDir; uniform vec3 sunColor; uniform float sunIntensity;
+  uniform vec3 skyTop; uniform vec3 skyHorizon;
+  uniform vec3 deepColor; uniform vec3 shallowColor;
+  uniform vec3 ledColor; uniform float ledIntensity;
+  uniform vec4 pool; // x0, x1, zc, r
+  uniform vec2 led1; uniform vec2 led2; uniform vec2 led3;
+  varying vec3 vWorld;
+  #include <fog_pars_fragment>
+  float sdfPool(vec2 p) {
+    if (p.x < pool.y) return max(abs(p.y - pool.z) - pool.w, pool.x - p.x);
+    return length(p - vec2(pool.y, pool.z)) - pool.w;
+  }
+  void main() {
+    vec2 p = vWorld.xz;
+    vec3 n1 = texture2D(normalMap, p * 0.42 + vec2(time * 0.030, time * 0.018)).xyz * 2.0 - 1.0;
+    vec3 n2 = texture2D(normalMap, p * 0.95 + vec2(-time * 0.022, time * 0.034)).xyz * 2.0 - 1.0;
+    vec3 n3 = texture2D(normalMap, p * 1.9 + vec2(time * 0.05, -time * 0.041)).xyz * 2.0 - 1.0;
+    vec3 n = normalize(vec3((n1.x + n2.x * 0.6 + n3.x * 0.25) * 0.42, 1.0, (n1.y + n2.y * 0.6 + n3.y * 0.25) * 0.42));
+    vec3 V = normalize(cameraPosition - vWorld);
+    float NdV = max(dot(n, V), 0.0);
+    float F = 0.03 + 0.97 * pow(1.0 - NdV, 5.0);
+    vec3 R = reflect(-V, n);
+    vec3 sky = mix(skyHorizon, skyTop, pow(clamp(R.y, 0.0, 1.0), 0.6));
+    vec3 H = normalize(normalize(sunDir) + V);
+    float NdH = max(dot(n, H), 0.0);
+    vec3 spec = sunColor * sunIntensity * (pow(NdH, 140.0) * 1.1 + pow(NdH, 900.0) * 2.5 + pow(NdH, 18.0) * 0.05);
+    float d = sdfPool(p);
+    float shallow = smoothstep(-1.1, 0.05, d);
+    float c1 = texture2D(caustic, p * 0.55 + vec2(time * 0.012, -time * 0.009)).r;
+    float c2 = texture2D(caustic, p * 0.35 - vec2(time * 0.008, time * 0.011)).r;
+    float caus = c1 * c2 * 1.6 + c1 * 0.25;
+    vec3 body = mix(deepColor, shallowColor, shallow);
+    body += vec3(0.55, 0.85, 1.0) * caus * 0.055;
+    float lf = 1.0 / (1.0 + 1.1 * dot(p - led1, p - led1)) + 1.0 / (1.0 + 1.1 * dot(p - led2, p - led2)) + 1.0 / (1.0 + 1.1 * dot(p - led3, p - led3));
+    body += ledColor * ledIntensity * lf * (0.45 + 0.8 * caus);
+    float foam = smoothstep(-0.16, 0.0, d) * (0.35 + 0.65 * c1);
+    body = mix(body, vec3(0.92, 0.97, 1.0), foam * 0.45);
+    vec3 col = mix(body, sky, F) + spec;
+    float alpha = mix(0.9, 0.66, shallow);
+    alpha = clamp(alpha + F * 0.6 + foam * 0.3, 0.0, 0.96);
+    gl_FragColor = vec4(col, alpha);
+    #include <tonemapping_fragment>
+    #include <colorspace_fragment>
+    #include <fog_fragment>
+  }`;
+
+// ---------------------------------------------------------------------------
+// Mobiliário procedural: cada função devolve um Group com origem no centro da
+// base (x → largura, z → profundidade, y → altura). Tudo feito de primitivas.
+// ---------------------------------------------------------------------------
+function cyl(rt, rb, h, mat, x, y, z, seg = 16, open = false) {
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(rt, rb, h, seg, 1, open), mat);
+  m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; return m;
+}
+function sph(r, mat, x, y, z) {
+  const m = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 9), mat);
+  m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; return m;
+}
+function furniture(M) {
+  const G = () => new THREE.Group();
+  const F = {
+    bed(w, l, blanket) {
+      const g = G();
+      g.add(box(w, 0.22, l, M.woodDark, 0, 0.16, 0));
+      g.add(box(w - 0.08, 0.2, l - 0.08, M.mattress, 0, 0.37, 0));
+      g.add(box(w - 0.12, 0.07, l * 0.6, blanket, 0, 0.5, l * 0.18));
+      if (w >= 1.2) { g.add(box(w * 0.4, 0.1, 0.4, M.white, -w * 0.24, 0.52, -l / 2 + 0.35)); g.add(box(w * 0.4, 0.1, 0.4, M.white, w * 0.24, 0.52, -l / 2 + 0.35)); }
+      else g.add(box(w * 0.6, 0.1, 0.4, M.white, 0, 0.52, -l / 2 + 0.35));
+      g.add(box(w + 0.06, 0.9, 0.07, M.woodDark, 0, 0.5, -l / 2 - 0.03));
+      return g;
+    },
+    nightstand(lamp = true) {
+      const g = G();
+      g.add(box(0.45, 0.5, 0.42, M.woodDark, 0, 0.25, 0));
+      g.add(box(0.14, 0.02, 0.02, M.chrome, 0, 0.32, 0.22));
+      if (lamp) { g.add(cyl(0.02, 0.03, 0.22, M.chrome, 0, 0.61, 0, 8)); g.add(cyl(0.07, 0.12, 0.14, M.cushion, 0, 0.78, 0, 12, true)); }
+      return g;
+    },
+    wardrobe(w, h = 2.0, d = 0.6, doors = 2) {
+      const g = G();
+      g.add(box(w, h, d, M.wood, 0, h / 2, 0));
+      g.add(box(w + 0.02, 0.04, d + 0.02, M.woodDark, 0, h + 0.02, 0));
+      for (let i = 1; i < doors; i++) g.add(box(0.01, h - 0.1, 0.01, M.woodDark, -w / 2 + (i * w) / doors, h / 2, d / 2));
+      for (let i = 0; i < doors; i++) { const cx = -w / 2 + ((i + 0.5) * w) / doors + (i < doors / 2 ? 0.06 : -0.06); g.add(cyl(0.008, 0.008, 0.14, M.chrome, cx, h * 0.5, d / 2 + 0.015, 6)); }
+      return g;
+    },
+    desk(w, d, withMonitor = true) {
+      const g = G();
+      g.add(box(w, 0.04, d, M.woodLite, 0, 0.74, 0));
+      for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) g.add(cyl(0.025, 0.025, 0.72, M.dark, sx * (w / 2 - 0.06), 0.36, sz * (d / 2 - 0.06), 8));
+      if (withMonitor) {
+        g.add(box(0.6, 0.36, 0.03, M.dark, 0, 1.02, -d / 2 + 0.14));
+        const scr = box(0.55, 0.31, 0.006, M.screenOff, 0, 1.02, -d / 2 + 0.16); scr.castShadow = false; g.add(scr);
+        g.add(cyl(0.02, 0.02, 0.1, M.dark, 0, 0.8, -d / 2 + 0.14, 8)); g.add(cyl(0.1, 0.11, 0.015, M.dark, 0, 0.765, -d / 2 + 0.14, 16));
+        g.add(box(0.42, 0.02, 0.14, M.dark, 0, 0.77, 0.06)); g.add(box(0.06, 0.02, 0.1, M.dark, 0.32, 0.77, 0.06));
+      }
+      return g;
+    },
+    officeChair() {
+      const g = G();
+      g.add(box(0.48, 0.08, 0.46, M.dark, 0, 0.47, 0));
+      g.add(box(0.46, 0.5, 0.06, M.dark, 0, 0.78, -0.22));
+      g.add(box(0.05, 0.03, 0.3, M.dark, -0.24, 0.66, 0)); g.add(box(0.05, 0.03, 0.3, M.dark, 0.24, 0.66, 0));
+      g.add(cyl(0.025, 0.025, 0.4, M.chrome, 0, 0.23, 0, 8));
+      for (let i = 0; i < 5; i++) { const a = (i / 5) * Math.PI * 2; const sp = box(0.3, 0.03, 0.04, M.dark, Math.cos(a) * 0.15, 0.04, Math.sin(a) * 0.15); sp.rotation.y = -a; g.add(sp); g.add(sph(0.03, M.dark, Math.cos(a) * 0.3, 0.03, Math.sin(a) * 0.3)); }
+      return g;
+    },
+    bookshelf(w, h, d = 0.3, levels = 4, seed = 1) {
+      const g = G(); const rnd = mulberry32(seed);
+      g.add(box(0.03, h, d, M.woodLite, -w / 2, h / 2, 0)); g.add(box(0.03, h, d, M.woodLite, w / 2, h / 2, 0));
+      g.add(box(w, 0.02, d, M.woodLite, 0, h, 0)); g.add(box(w, h, 0.02, M.woodLite, 0, h / 2, -d / 2));
+      for (let i = 0; i < levels; i++) {
+        const y = (i * h) / levels + 0.02; g.add(box(w, 0.025, d, M.woodLite, 0, y, 0));
+        let x = -w / 2 + 0.06;
+        while (x < w / 2 - 0.1) { const bw = 0.03 + rnd() * 0.04, bh = 0.16 + rnd() * 0.1; if (rnd() < 0.85) g.add(box(bw, bh, d * 0.7, M.book[Math.floor(rnd() * M.book.length)], x + bw / 2, y + bh / 2 + 0.012, 0)); x += bw + 0.005; }
+      }
+      return g;
+    },
+    sofa(w, d, fabric) {
+      const g = G();
+      g.add(box(w, 0.38, d, fabric, 0, 0.19, 0));
+      g.add(box(w, 0.42, 0.2, fabric, 0, 0.59, -d / 2 + 0.1));
+      g.add(box(0.18, 0.56, d, fabric, -w / 2 + 0.09, 0.28, 0)); g.add(box(0.18, 0.56, d, fabric, w / 2 - 0.09, 0.28, 0));
+      const n = Math.max(1, Math.round((w - 0.36) / 0.7)), cw = (w - 0.36) / n;
+      for (let i = 0; i < n; i++) g.add(box(cw - 0.05, 0.12, d - 0.32, M.cushion, -w / 2 + 0.18 + cw * (i + 0.5), 0.44, 0.08));
+      return g;
+    },
+    diningTable(rx, rz) {
+      const g = G();
+      const top = cyl(1, 1, 0.05, M.tan, 0, 0.75, 0, 36); top.scale.set(rx, 1, rz); g.add(top);
+      g.add(cyl(0.08, 0.08, 0.7, M.woodDark, 0, 0.36, 0, 12));
+      const base = cyl(0.45, 0.5, 0.04, M.woodDark, 0, 0.02, 0, 24); base.scale.set(rx / rz, 1, 1); g.add(base);
+      return g;
+    },
+    chair(fabric) {
+      const g = G();
+      g.add(box(0.42, 0.05, 0.42, M.woodLite, 0, 0.45, 0)); g.add(box(0.38, 0.04, 0.38, fabric, 0, 0.495, 0));
+      g.add(box(0.03, 0.45, 0.03, M.woodLite, -0.18, 0.7, -0.19)); g.add(box(0.03, 0.45, 0.03, M.woodLite, 0.18, 0.7, -0.19));
+      g.add(box(0.4, 0.16, 0.03, M.woodLite, 0, 0.84, -0.19));
+      for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) g.add(cyl(0.02, 0.02, 0.44, M.woodLite, sx * 0.18, 0.22, sz * 0.18, 8));
+      return g;
+    },
+    fridge() {
+      const g = G();
+      g.add(box(0.75, 1.85, 0.7, M.steel, 0, 0.925, 0));
+      g.add(box(0.73, 0.012, 0.01, M.dark, 0, 1.25, 0.352));
+      g.add(box(0.02, 0.4, 0.025, M.chrome, 0.28, 1.5, 0.37)); g.add(box(0.02, 0.7, 0.025, M.chrome, 0.28, 0.75, 0.37));
+      return g;
+    },
+    stove() {
+      const g = G();
+      g.add(box(0.6, 0.88, 0.6, M.white, 0, 0.44, 0)); g.add(box(0.6, 0.02, 0.6, M.dark, 0, 0.89, 0));
+      for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) g.add(cyl(0.08, 0.08, 0.012, M.chrome, sx * 0.14, 0.905, sz * 0.14, 16));
+      g.add(box(0.52, 0.4, 0.012, M.steel, 0, 0.4, 0.305)); g.add(box(0.36, 0.14, 0.006, M.dark, 0, 0.42, 0.313));
+      g.add(box(0.5, 0.02, 0.025, M.chrome, 0, 0.64, 0.32));
+      for (let i = 0; i < 4; i++) g.add(cyl(0.015, 0.015, 0.03, M.chrome, -0.2 + i * 0.13, 0.78, 0.31, 8));
+      return g;
+    },
+    hood() {
+      const g = G();
+      g.add(box(0.7, 0.08, 0.5, M.steel, 0, 0.04, 0)); g.add(box(0.3, 0.6, 0.3, M.steel, 0, 0.38, -0.1));
+      return g;
+    },
+    cabinet(w, h, d, doors, mat) {
+      const g = G(); mat = mat || M.wood;
+      g.add(box(w, h, d, mat, 0, h / 2, 0));
+      g.add(box(w + 0.02, 0.03, d + 0.02, M.woodDark, 0, h + 0.015, 0));
+      for (let i = 1; i < doors; i++) g.add(box(0.008, h - 0.08, 0.01, M.woodDark, -w / 2 + (i * w) / doors, h / 2, d / 2));
+      for (let i = 0; i < doors; i++) g.add(cyl(0.007, 0.007, 0.1, M.chrome, -w / 2 + ((i + 0.5) * w) / doors, h * 0.55, d / 2 + 0.012, 6));
+      return g;
+    },
+    sink(w = 0.5, d = 0.4) {
+      const g = G();
+      g.add(box(w, 0.03, d, M.steel, 0, 0.0, 0)); g.add(box(w - 0.08, 0.02, d - 0.08, M.dark, 0, 0.005, 0));
+      g.add(cyl(0.014, 0.014, 0.22, M.chrome, 0, 0.11, -d / 2 + 0.05, 8)); g.add(box(0.025, 0.025, 0.16, M.chrome, 0, 0.22, -d / 2 + 0.12));
+      return g;
+    },
+    toilet() {
+      const g = G();
+      g.add(box(0.38, 0.38, 0.17, M.white, 0, 0.58, -0.2)); g.add(box(0.34, 0.02, 0.1, M.chrome, 0, 0.78, -0.2));
+      const bowl = cyl(0.19, 0.14, 0.38, M.white, 0, 0.19, 0.05, 16); bowl.scale.set(1, 1, 1.25); g.add(bowl);
+      const seat = cyl(0.2, 0.2, 0.04, M.white, 0, 0.4, 0.05, 16); seat.scale.set(1, 1, 1.25); g.add(seat);
+      return g;
+    },
+    shower(s) {
+      const g = G();
+      g.add(box(s, 0.06, s, M.white, 0, 0.03, 0)); g.add(cyl(0.04, 0.04, 0.005, M.chrome, 0, 0.065, 0, 12));
+      const p1 = box(0.02, 2.0, s, M.glass, s / 2, 1.0, 0, { cast: false, receive: false }); const p2 = box(s, 2.0, 0.02, M.glass, 0, 1.0, s / 2, { cast: false, receive: false }); g.add(p1, p2);
+      g.add(box(0.03, 2.0, 0.03, M.chrome, s / 2, 1.0, s / 2)); g.add(box(0.03, 0.03, s, M.chrome, s / 2, 2.0, 0)); g.add(box(s, 0.03, 0.03, M.chrome, 0, 2.0, s / 2));
+      g.add(cyl(0.015, 0.015, 1.9, M.chrome, -s / 2 + 0.06, 0.98, -s / 2 + 0.06, 8)); g.add(box(0.02, 0.02, 0.3, M.chrome, -s / 2 + 0.06, 1.95, -s / 2 + 0.2)); g.add(cyl(0.08, 0.08, 0.02, M.chrome, -s / 2 + 0.06, 1.95, -s / 2 + 0.35, 12));
+      return g;
+    },
+    washbasin() {
+      const g = G();
+      g.add(box(0.6, 0.78, 0.45, M.white, 0, 0.39, 0)); g.add(box(0.64, 0.04, 0.48, M.steel, 0, 0.8, 0));
+      g.add(cyl(0.17, 0.13, 0.1, M.white, 0, 0.86, 0.02, 16)); g.add(cyl(0.012, 0.012, 0.18, M.chrome, 0, 0.9, -0.16, 8)); g.add(box(0.02, 0.02, 0.12, M.chrome, 0, 0.99, -0.1));
+      g.add(box(0.5, 0.6, 0.02, M.mirror, 0, 1.5, -0.235));
+      return g;
+    },
+    shelves(w, h, d, levels, seed = 3) {
+      const g = G(); const rnd = mulberry32(seed);
+      g.add(box(0.03, h, d, M.woodLite, -w / 2, h / 2, 0)); g.add(box(0.03, h, d, M.woodLite, w / 2, h / 2, 0));
+      for (let i = 0; i <= levels; i++) {
+        const y = 0.1 + (i * (h - 0.1)) / levels; g.add(box(w, 0.025, d, M.woodLite, 0, y, 0));
+        if (i < levels) { let x = -w / 2 + 0.08; while (x < w / 2 - 0.12) { const iw = 0.08 + rnd() * 0.1, ih = 0.1 + rnd() * 0.16; if (rnd() < 0.5) g.add(cyl(iw / 2, iw / 2, ih, M.book[Math.floor(rnd() * 6)], x + iw / 2, y + ih / 2 + 0.012, 0, 10)); else g.add(box(iw, ih, iw, M.book[Math.floor(rnd() * 6)], x + iw / 2, y + ih / 2 + 0.012, 0)); x += iw + 0.04 + rnd() * 0.06; } }
+      }
+      return g;
+    },
+    car() {
+      const g = G();
+      g.add(box(1.7, 0.5, 4.1, M.car, 0, 0.55, 0));
+      g.add(box(1.5, 0.42, 1.9, M.dark, 0, 1.01, -0.15));
+      const glass = box(1.56, 0.44, 1.96, M.glassDark, 0, 1.01, -0.15, { cast: false, receive: false }); g.add(glass);
+      g.add(box(1.5, 0.03, 1.9, M.car, 0, 1.24, -0.15));
+      for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) { const wh = cyl(0.33, 0.33, 0.24, M.tire, sx * 0.8, 0.33, sz * 1.35, 18); wh.rotation.z = Math.PI / 2; g.add(wh); const hub = cyl(0.14, 0.14, 0.26, M.chrome, sx * 0.8, 0.33, sz * 1.35, 12); hub.rotation.z = Math.PI / 2; g.add(hub); }
+      g.add(box(1.72, 0.14, 0.1, M.dark, 0, 0.38, -2.06)); g.add(box(1.72, 0.14, 0.1, M.dark, 0, 0.38, 2.06));
+      g.add(box(0.32, 0.12, 0.03, M.lightWhite, -0.6, 0.62, -2.06)); g.add(box(0.32, 0.12, 0.03, M.lightWhite, 0.6, 0.62, -2.06));
+      g.add(box(0.32, 0.1, 0.03, M.lightRed, -0.6, 0.62, 2.06)); g.add(box(0.32, 0.1, 0.03, M.lightRed, 0.6, 0.62, 2.06));
+      g.add(box(0.12, 0.08, 0.16, M.car, -0.9, 0.95, -0.9)); g.add(box(0.12, 0.08, 0.16, M.car, 0.9, 0.95, -0.9));
+      return g;
+    },
+    // Volkswagen up! TSI — hatch compacto (3,60 m × 1,64 m × 1,50 m), frente em -z
+    upTsi(paint) {
+      const g = G();
+      const body = new THREE.MeshStandardMaterial({ color: paint, roughness: 0.35, metalness: 0.45 });
+      const trim = new THREE.MeshStandardMaterial({ color: 0x1b1b1b, roughness: 0.8 });
+      // silhueta lateral (x = comprimento, y = altura), extrudada na largura
+      const pr = new THREE.Shape();
+      const pts = [[-1.8, 0.34], [-1.8, 0.6], [-1.74, 0.74], [-1.45, 0.8], [-0.95, 0.86], [-0.55, 1.28], [-0.3, 1.44], [0.2, 1.5], [1.1, 1.5], [1.42, 1.42], [1.72, 1.0], [1.8, 0.66], [1.8, 0.34]];
+      pr.moveTo(pts[0][0], pts[0][1]); for (const [x, y] of pts.slice(1)) pr.lineTo(x, y); pr.closePath();
+      const bodyGeo = new THREE.ExtrudeGeometry(pr, { depth: 1.56, bevelEnabled: true, bevelThickness: 0.04, bevelSize: 0.04, bevelSegments: 3 });
+      const bm = new THREE.Mesh(bodyGeo, body); bm.rotation.y = -Math.PI / 2; bm.position.x = 0.78; bm.castShadow = true; bm.receiveShadow = true; g.add(bm);
+      // vidros: para-brisa, vigia traseira e janelas laterais (com colunas entre elas)
+      const glass = new THREE.MeshPhysicalMaterial({ color: 0x1f2a36, roughness: 0.08, metalness: 0.3, transparent: true, opacity: 0.85 });
+      const pane = (w, h, x, y, z, rx = 0) => { const m = box(w, h, 0.03, glass, x, y, z, { cast: false }); m.rotation.x = rx; g.add(m); };
+      pane(1.42, 0.62, 0, 1.16, -0.68, 0.72);
+      pane(1.3, 0.5, 0, 1.2, 1.6, 2.5);
+      for (const sx of [-1, 1]) {
+        const side = (h, y, z, l) => { const m = box(0.03, h, l, glass, sx * 0.83, y, z, { cast: false }); g.add(m); };
+        side(0.42, 1.16, -0.05, 0.78); side(0.4, 1.16, 0.85, 0.72);
+        g.add(box(0.02, 0.5, 0.06, trim, sx * 0.83, 1.15, 0.43));                         // coluna B
+        g.add(box(0.14, 0.09, 0.18, body, sx * 0.9, 1.0, -0.32)); g.add(box(0.08, 0.03, 0.05, trim, sx * 0.84, 0.98, -0.32)); // retrovisores
+        g.add(box(0.012, 0.42, 0.012, trim, sx * 0.83, 0.62, 0.42));                       // vinco das portas
+        g.add(box(0.012, 0.42, 0.012, trim, sx * 0.83, 0.62, -0.62));
+        g.add(box(0.03, 0.02, 0.1, M.chrome, sx * 0.84, 0.86, 0.05)); g.add(box(0.03, 0.02, 0.1, M.chrome, sx * 0.84, 0.86, 0.85)); // maçanetas
+      }
+      // rodas aro 15 (185/55 R15)
+      for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
+        const wh = cyl(0.29, 0.29, 0.19, M.tire, sx * 0.72, 0.29, sz * 1.21, 20); wh.rotation.z = Math.PI / 2; g.add(wh);
+        const rim = cyl(0.19, 0.19, 0.2, M.chrome, sx * 0.72, 0.29, sz * 1.21, 10); rim.rotation.z = Math.PI / 2; g.add(rim);
+        const cap = cyl(0.05, 0.05, 0.22, trim, sx * 0.72, 0.29, sz * 1.21, 8); cap.rotation.z = Math.PI / 2; g.add(cap);
+      }
+      // para-choques, grade, faróis redondos, lanternas verticais, placa
+      g.add(box(1.5, 0.14, 0.08, trim, 0, 0.44, -1.82)); g.add(box(1.5, 0.14, 0.08, trim, 0, 0.44, 1.82));
+      g.add(box(0.7, 0.08, 0.02, trim, 0, 0.7, -1.79)); g.add(box(0.28, 0.06, 0.02, M.chrome, 0, 0.7, -1.8));
+      for (const sx of [-1, 1]) {
+        const hl = sph(0.11, M.lightWhite, sx * 0.55, 0.76, -1.76); hl.scale.set(1, 0.75, 0.5); g.add(hl);
+        g.add(box(0.12, 0.34, 0.03, M.lightRed, sx * 0.7, 1.0, 1.81));
+      }
+      g.add(box(0.4, 0.13, 0.02, M.white, 0, 0.6, 1.82)); g.add(box(0.4, 0.13, 0.02, M.white, 0, 0.56, -1.82));
+      return g;
+    },
+    plant(size = 1, seed = 1) {
+      const g = G(); const rnd = mulberry32(seed);
+      g.add(cyl(0.2, 0.15, 0.32, M.pot, 0, 0.16, 0, 12)); g.add(cyl(0.18, 0.18, 0.02, M.soil, 0, 0.32, 0, 12));
+      g.add(cyl(0.03, 0.045, 0.5, M.trunk, 0, 0.56, 0, 8));
+      for (let i = 0; i < 6; i++) { const a = rnd() * Math.PI * 2, r = 0.1 + rnd() * 0.16; g.add(sph(0.2 + rnd() * 0.1, i % 2 ? M.plant : M.leaf2, Math.cos(a) * r, 0.9 + rnd() * 0.25, Math.sin(a) * r)); }
+      g.scale.setScalar(size); return g;
+    },
+    tree() {
+      const g = G();
+      g.add(cyl(0.09, 0.13, 2.0, M.trunk, 0, 1.0, 0, 10));
+      const rnd = mulberry32(8);
+      for (let i = 0; i < 7; i++) { const a = rnd() * Math.PI * 2, r = 0.15 + rnd() * 0.4; g.add(sph(0.5 + rnd() * 0.25, i % 2 ? M.plant : M.leaf2, Math.cos(a) * r, 2.2 + rnd() * 0.5, Math.sin(a) * r)); }
+      return g;
+    },
+    ladder() {
+      const g = G();
+      for (const x of [-0.2, 0.2]) {
+        g.add(cyl(0.02, 0.02, 1.5, M.chrome, x, 0.25, 0, 8));
+        const bend = new THREE.Mesh(new THREE.TorusGeometry(0.25, 0.02, 8, 12, Math.PI / 2), M.chrome); bend.position.set(x, 1.0, -0.25); bend.rotation.y = Math.PI / 2; bend.castShadow = true; g.add(bend);
+        const arm = cyl(0.02, 0.02, 0.35, M.chrome, x, 1.25, -0.42, 8); arm.rotation.x = Math.PI / 2; g.add(arm);
+      }
+      for (const y of [-0.35, -0.05, 0.25, 0.55]) g.add(box(0.4, 0.025, 0.05, M.chrome, 0, y, 0));
+      return g;
+    },
+    lounger(fabric) {
+      const g = G();
+      g.add(box(0.65, 0.04, 1.9, M.white, 0, 0.34, 0));
+      for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) g.add(box(0.04, 0.32, 0.04, M.white, sx * 0.29, 0.16, sz * 0.85));
+      g.add(box(0.6, 0.08, 1.15, fabric, 0, 0.4, 0.33));
+      const back = box(0.6, 0.08, 0.75, fabric, 0, 0.6, -0.6); back.rotation.x = -0.75; g.add(back);
+      return g;
+    },
+    parasol() {
+      const g = G();
+      g.add(cyl(0.02, 0.02, 2.3, M.chrome, 0, 1.15, 0, 8)); g.add(cyl(0.22, 0.25, 0.06, M.dark, 0, 0.03, 0, 12));
+      const c = new THREE.Mesh(new THREE.ConeGeometry(0.9, 0.34, 10, 1, true), new THREE.MeshStandardMaterial({ color: 0xf1e3c8, roughness: 0.95, side: THREE.DoubleSide })); c.position.y = 2.28; c.castShadow = true; g.add(c);
+      return g;
+    },
+    roundTable(r = 0.45) {
+      const g = G();
+      g.add(cyl(r, r, 0.04, M.woodLite, 0, 0.72, 0, 24)); g.add(cyl(0.04, 0.04, 0.7, M.chrome, 0, 0.36, 0, 8)); g.add(cyl(0.25, 0.28, 0.03, M.chrome, 0, 0.015, 0, 16));
+      return g;
+    },
+    rug(w, d, color) {
+      const g = G(); const m = new THREE.MeshStandardMaterial({ color, roughness: 1 });
+      const dark = new THREE.MeshStandardMaterial({ color: new THREE.Color(color).multiplyScalar(0.7), roughness: 1 });
+      g.add(box(w + 0.16, 0.01, d + 0.16, dark, 0, 0.005, 0, { cast: false })); g.add(box(w, 0.012, d, m, 0, 0.012, 0, { cast: false }));
+      return g;
+    },
+  };
+  return F;
+}
+
+// ---------------------------------------------------------------------------
+// Desempenho: funde as malhas estáticas por material (um draw call por material)
+// ---------------------------------------------------------------------------
+function mergeStatic(scene) {
+  scene.updateMatrixWorld(true);
+  const groups = new Map();
+  scene.traverse((o) => {
+    if (!o.isMesh || o.isSprite || o.isInstancedMesh || o.userData.item || o.userData.zone || o.userData.keep || o.userData.noMerge) return;
+    for (let q = o.parent; q; q = q.parent) if (q.userData && q.userData.keep) return;
+    const g = o.geometry, m = o.material;
+    if (Array.isArray(m) || !g.attributes.position || !g.attributes.normal || !g.attributes.uv) return;
+    const key = m.uuid + (o.castShadow ? ':c' : ':n') + (o.receiveShadow ? 'r' : '');
+    if (!groups.has(key)) groups.set(key, { mat: m, meshes: [] });
+    groups.get(key).meshes.push(o);
+  });
+  let before = 0, after = 0;
+  for (const { mat, meshes } of groups.values()) {
+    before += meshes.length;
+    if (meshes.length < 2) { after += meshes.length; continue; }
+    const parts = []; let total = 0;
+    for (const o of meshes) {
+      const g = o.geometry.index ? o.geometry.toNonIndexed() : o.geometry.clone();
+      g.applyMatrix4(o.matrixWorld); parts.push(g); total += g.attributes.position.count;
+    }
+    const pos = new Float32Array(total * 3), nor = new Float32Array(total * 3), uv = new Float32Array(total * 2);
+    let off = 0;
+    for (const g of parts) {
+      const n = g.attributes.position.count;
+      pos.set(g.attributes.position.array, off * 3); nor.set(g.attributes.normal.array, off * 3); uv.set(g.attributes.uv.array, off * 2);
+      off += n; g.dispose();
+    }
+    const merged = new THREE.BufferGeometry();
+    merged.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    merged.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+    merged.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    merged.computeBoundingSphere();
+    const mesh = new THREE.Mesh(merged, mat);
+    mesh.castShadow = meshes[0].castShadow; mesh.receiveShadow = meshes[0].receiveShadow; mesh.matrixAutoUpdate = false;
+    for (const o of meshes) { o.parent.remove(o); o.geometry.dispose(); }
+    scene.add(mesh); after += 1;
+  }
+  return { before, after };
+}
+
+// ---------------------------------------------------------------------------
+// Controle de órbita (mínimo, sem dependências): arrastar gira, roda/pinça
+// aproxima, botão direito / dois dedos / Shift arrasta o alvo.
+// ---------------------------------------------------------------------------
+// borracha além do limite (v1.6): passa de lo/hi com resistência crescente (mesma curva da gaveta); ao soltar, volta ao limite
+const rubber = (v, lo, hi, dim) => { const rb = (x) => x * dim * 0.55 / (dim + 0.55 * x); return v < lo ? lo - rb(lo - v) : v > hi ? hi + rb(v - hi) : v; };
+const _oRay = new THREE.Raycaster(), _oNdc = new THREE.Vector2();
+// Toque (v1.6): 1 dedo gira com sensibilidade pela largura do canvas e trava o eixo depois de 10 px (horizontal → só gira,
+// vertical → só inclina, diagonal → os dois); ao soltar, o giro segue com a velocidade do dedo e desacelera. 2 dedos estilo mapa:
+// pinça (zoom no ponto entre os dedos), torção (gira) e arrasto paralelo (pan), cada um só depois do seu limiar. Mouse como antes.
+class Orbit {
+  constructor(camera, dom, target) {
+    this.camera = camera; this.dom = dom;
+    this.target = target.clone(); this.targetGoal = target.clone();
+    this.sph = new THREE.Spherical().setFromVector3(camera.position.clone().sub(target));
+    this.goal = this.sph.clone();
+    this.minDist = 5; this.maxDist = 64; this.minPolar = 0.03; this.maxPolar = 1.45;
+    this.speed = 9; this.userAt = 0;   // speed: suavização (menor = voo mais lento); userAt: último gesto do usuário
+    this.pointers = new Map(); this.moved = 0; this.vel = 0; this.touched = false;   // vel: inércia do giro (rad/s)
+    this.onClick = null; this.onHover = null; this.enabled = true;   // enabled = false na visão de pessoa (o Walker assume os gestos)
+    this._down = (e) => this.down(e); this._move = (e) => this.move(e);
+    this._up = (e) => this.up(e); this._wheel = (e) => this.wheel(e);
+    dom.addEventListener('pointerdown', this._down);
+    dom.addEventListener('pointermove', this._move);
+    dom.addEventListener('pointerup', this._up);
+    dom.addEventListener('pointercancel', this._up);
+    dom.addEventListener('wheel', this._wheel, { passive: false });
+    dom.addEventListener('contextmenu', (e) => e.preventDefault());
+    this.dirty = true;
+  }
+  dispose() {
+    const d = this.dom;
+    d.removeEventListener('pointerdown', this._down); d.removeEventListener('pointermove', this._move);
+    d.removeEventListener('pointerup', this._up); d.removeEventListener('pointercancel', this._up);
+    d.removeEventListener('wheel', this._wheel);
+  }
+  down(e) {
+    if (!this.enabled) return;
+    this.vel = 0;   // qualquer toque segura a inércia
+    this.dom.setPointerCapture(e.pointerId);
+    if (!this.pointers.size) this.multi = false;
+    this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY, b: e.button, shift: e.shiftKey, touch: e.pointerType !== 'mouse', lock: '', hist: [] });
+    this.raw = { phi: this.goal.phi, r: this.goal.radius };   // valores "sem borracha" do gesto
+    if (this.pointers.size === 2) { const g = this._two(); this.multi = true; this.g2 = Object.assign(g, { d0: g.d, a0: g.a, x0: g.x, y0: g.y, on: {} }); }
+    this.moved = 0;
+  }
+  _two() {
+    const [a, b] = [...this.pointers.values()];
+    return { d: Math.hypot(a.x - b.x, a.y - b.y), a: Math.atan2(b.y - a.y, b.x - a.x), x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  }
+  move(e) {
+    if (!this.enabled) return;
+    const p = this.pointers.get(e.pointerId);
+    if (!p) { if (this.onHover) this.onHover(e); return; }
+    const dx = e.clientX - p.x, dy = e.clientY - p.y;
+    p.x = e.clientX; p.y = e.clientY; this.touched = true; this.userAt = performance.now(); this.speed = 9;
+    this.moved += Math.abs(dx) + Math.abs(dy);
+    if (this.pointers.size === 2) this._twoMove();
+    else if (this.multi) return;   // sobrou um dedo da pinça: espera soltar
+    else if (p.b === 2 || p.b === 1 || p.shift) {
+      this.pan(dx, dy);
+    } else if (!p.touch) {
+      this.goal.theta -= dx * 0.0055;
+      this.goal.phi = clamp(this.goal.phi - dy * 0.0055, this.minPolar, this.maxPolar);
+    } else {
+      if (!p.lock) {   // decide o eixo depois de 10 px (o trecho do limiar não conta: sem pulo)
+        const ax = Math.abs(p.x - p.sx), ay = Math.abs(p.y - p.sy); if (ax + ay < 10) return;
+        p.lock = ax > 2 * ay ? 'h' : ay > 2 * ax ? 'v' : 'hv'; return;
+      }
+      const k = 2 * Math.PI / (1.5 * (this.dom.clientWidth || 600));   // arrastar 1,5 largura = uma volta
+      if (p.lock.includes('h')) {
+        this.goal.theta -= dx * k; p.hist.push([e.timeStamp, this.goal.theta]);
+        while (p.hist.length > 2 && e.timeStamp - p.hist[0][0] > 100) p.hist.shift();
+      }
+      if (p.lock.includes('v')) { this.raw.phi -= dy * k; this.goal.phi = rubber(this.raw.phi, this.minPolar, this.maxPolar, 0.3); }
+    }
+    this.dirty = true;
+  }
+  // 2 dedos: pinça → zoom no ponto médio (> 4 %), torção → gira (> 6°), arrasto paralelo → pan (> 12 px); ligado, segue até soltar
+  _twoMove() {
+    const g = this.g2, n = this._two(), ang = (x) => Math.atan2(Math.sin(x), Math.cos(x));
+    g.on.z = g.on.z || Math.abs(n.d / g.d0 - 1) > 0.04;
+    g.on.r = g.on.r || Math.abs(ang(n.a - g.a0)) > 0.105;
+    g.on.p = g.on.p || Math.hypot(n.x - g.x0, n.y - g.y0) > 12;
+    if (g.on.r) this.goal.theta += ang(n.a - g.a);
+    if (g.on.p) this.pan(n.x - g.x, n.y - g.y);
+    if (g.on.z && n.d > 1) this._zoomAt(g.d / n.d, n.x, n.y);
+    Object.assign(g, { d: n.d, a: n.a, x: n.x, y: n.y });
+  }
+  // zoom com o ponto do piso sob (cx, cy) parado na tela: câmera e alvo encolhem/crescem em torno dele
+  _zoomAt(f, cx, cy) {
+    this.raw.r *= f;
+    const r0 = this.goal.radius, r1 = rubber(this.raw.r, this.minDist, this.maxDist, 6); this.goal.radius = r1;
+    const rc = this.dom.getBoundingClientRect();
+    _oRay.setFromCamera(_oNdc.set((cx - rc.left) / rc.width * 2 - 1, -(cy - rc.top) / rc.height * 2 + 1), this.camera);
+    const o = _oRay.ray.origin, d = _oRay.ray.direction; if (d.y > -1e-3) return;
+    const P = o.clone().addScaledVector(d, -o.y / d.y);
+    this.targetGoal.sub(P).multiplyScalar(r1 / r0).add(P); this._clampT();
+  }
+  up(e) {
+    if (!this.enabled) return;
+    const p = this.pointers.get(e.pointerId);
+    this.pointers.delete(e.pointerId);
+    try { this.dom.releasePointerCapture(e.pointerId); } catch (_) {}
+    if (p && this.moved < 6 && p.b === 0 && !this.multi && this.onClick) this.onClick(e);
+    // inércia: o giro segue com a velocidade dos últimos ~100 ms (se o dedo parou antes de soltar, não)
+    const h = p && p.hist, a = h && h[0], b = h && h[h.length - 1];
+    if (h && h.length > 1 && !this.multi && e.type === 'pointerup' && e.timeStamp - b[0] < 50 && b[0] > a[0]) this.vel = (b[1] - a[1]) / (b[0] - a[0]) * 1000;
+    if (!this.pointers.size) {   // borracha: volta ao limite
+      this.goal.phi = clamp(this.goal.phi, this.minPolar, this.maxPolar); this.goal.radius = clamp(this.goal.radius, this.minDist, this.maxDist); this.dirty = true;
+    }
+  }
+  wheel(e) { e.preventDefault(); if (!this.enabled) return; this.vel = 0; this.touched = true; this.userAt = performance.now(); this.speed = 9; this.zoomBy(Math.exp(e.deltaY * 0.0012)); this.dirty = true; }
+  zoomBy(f) { this.goal.radius = clamp(this.goal.radius * f, this.minDist, this.maxDist); }
+  pan(dx, dy) {
+    const k = this.goal.radius * 0.0016;
+    const fwd = new THREE.Vector3(); this.camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
+    const right = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0)).normalize();
+    this.targetGoal.addScaledVector(right, -dx * k).addScaledVector(fwd, dy * k); this._clampT();
+  }
+  _clampT() {
+    this.targetGoal.x = clamp(this.targetGoal.x, -4, LOT.w + 4);
+    this.targetGoal.z = clamp(this.targetGoal.z, -4, LOT.d + 4);
+  }
+  reset(pos, target) {
+    this.vel = 0; this.goal.setFromVector3(pos.clone().sub(target)); this.targetGoal.copy(target); this.dirty = true;
+    // gira pelo lado mais curto (theta acumula voltas quando o usuário arrasta)
+    const d = this.goal.theta - this.sph.theta; this.goal.theta = this.sph.theta + (((d + Math.PI) % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI) - Math.PI;
+  }
+  // voo suave até a pose (mais lento que o arrasto; qualquer gesto do usuário volta ao normal)
+  fly(pos, target, speed = 2.6) { this.reset(pos, target); this.speed = speed; }
+  update(dt) {
+    const k = 1 - Math.exp(-dt * this.speed);
+    if (this.vel) { this.goal.theta += this.vel * dt; this.vel *= Math.pow(0.998, dt * 1000); if (Math.abs(this.vel) < 0.02) this.vel = 0; }   // inércia (0,998 por ms)
+    // vista geral girando devagar quando ninguém mexe (~6 s parado); card._autoOrbitOk() recusa em reduced-motion, painel, Pessoa e Vista de cima
+    if (!this.vel && !this.pointers.size && this.enabled && this.card && this.card._autoOrbitOk && performance.now() - this.userAt > 6000 && this.card._autoOrbitOk()) this.goal.theta += 0.045 * dt;
+    const s = this.sph;
+    s.theta += (this.goal.theta - s.theta) * k;
+    s.phi += (this.goal.phi - s.phi) * k;
+    s.radius += (this.goal.radius - s.radius) * k;
+    this.target.lerp(this.targetGoal, k);
+    const moving = Math.abs(this.goal.theta - s.theta) + Math.abs(this.goal.phi - s.phi) + Math.abs(this.goal.radius - s.radius) + this.target.distanceTo(this.targetGoal) > 1e-4 || !!this.vel;
+    this.camera.position.setFromSpherical(s).add(this.target);
+    this.camera.lookAt(this.target);
+    const wasDirty = this.dirty; this.dirty = moving; this.moving = moving;
+    if (!moving) this.speed = 9;
+    return wasDirty || moving;
+  }
+}
+
+const _dm1 = new THREE.Matrix4(), _dm2 = new THREE.Matrix4(), _dm3 = new THREE.Matrix4();   // temporários das portas (_doorApply)
+const _rsz = new THREE.Vector2();   // temporário do _resize
+
+// ---------------------------------------------------------------------------
+// Visão de pessoa: câmera a 1,6 m do piso; setas/WASD ou joystick andam, arrastar vira a cabeça (Q/E também), Shift corre.
+// Clicar no piso anda até lá (estilo Street View, desviando das paredes e da piscina). Colisão simples com as paredes
+// (card._walkCollide); vãos de porta passam. Espelha o estado nas flags do Orbit (moving/dirty/userAt/touched).
+// ---------------------------------------------------------------------------
+class Walker {
+  constructor(card, camera, dom) {
+    this.card = card; this.camera = camera; this.dom = dom;
+    this.pos = new THREE.Vector3(6.1, 1.6, 15.2);   // começa logo depois do portãozinho do muro, olhando para a casa
+    this.yaw = 0; this.pitch = 0;                    // frente = (−sin yaw, 0, −cos yaw): yaw 0 olha para −z (para dentro do lote)
+    this.vel = new THREE.Vector3(); this.keys = new Set(); this.joy = { x: 0, y: 0 };
+    this.on = false; this.moving = false; this.dirty = false; this.head = false; this.gesture = false;
+    this.look = null; this.moved = 0; this.lx = 0; this.ly = 0; this.btn = 0;
+    this.path = null;   // caminhada até o ponto clicado { pts, i, … }
+    this._pd = (e) => this.down(e); this._pm = (e) => this.move(e); this._pu = (e) => this.up(e);
+    this._kd = (e) => this.key(e, true); this._ku = (e) => this.key(e, false); this._blur = () => this.keys.clear();
+    this._wheel = (e) => e.preventDefault();
+    this._joyReset = () => {}; this._joyBind();
+  }
+  enable() {
+    if (this.on) return; this.on = true; this.dirty = true;
+    const d = this.dom;
+    d.addEventListener('pointerdown', this._pd); d.addEventListener('pointermove', this._pm);
+    d.addEventListener('pointerup', this._pu); d.addEventListener('pointercancel', this._pu);
+    d.addEventListener('wheel', this._wheel, { passive: false });
+    window.addEventListener('keydown', this._kd, true); window.addEventListener('keyup', this._ku, true);   // captura: os atalhos do HA (E, C, A…) não disparam enquanto anda
+    window.addEventListener('blur', this._blur);   // trocou de janela com tecla apertada: solta tudo
+  }
+  disable() {
+    if (!this.on) return; this.on = false;
+    const d = this.dom;
+    d.removeEventListener('pointerdown', this._pd); d.removeEventListener('pointermove', this._pm);
+    d.removeEventListener('pointerup', this._pu); d.removeEventListener('pointercancel', this._pu);
+    d.removeEventListener('wheel', this._wheel);
+    window.removeEventListener('keydown', this._kd, true); window.removeEventListener('keyup', this._ku, true); window.removeEventListener('blur', this._blur);
+    this.keys.clear(); this.look = null; this._joyReset(); this.vel.set(0, 0, 0);
+  }
+  reset(x, z, yaw = 0, pitch = 0) {
+    this.path = null; this.pos.set(x, 1.6, z); this.yaw = yaw; this.pitch = pitch; this.vel.set(0, 0, 0); this.dirty = true;
+  }
+  // interrompe a caminhada até o ponto clicado (teclado/joystick assumem, chegou ou travou)
+  stop(arrived) { if (!this.path) return; this.path = null; this.card._walkStopped(arrived); }
+  down(e) {
+    if (this.look != null) return;   // um dedo olha por vez (o outro pode estar no joystick)
+    this.look = e.pointerId; this.moved = 0; this.lx = e.clientX; this.ly = e.clientY; this.btn = e.button;
+    try { this.dom.setPointerCapture(e.pointerId); } catch (_) {}
+  }
+  move(e) {
+    if (e.pointerId !== this.look) { if (this.look == null && e.pointerType === 'mouse') this.card._onHover(e); return; }
+    const dx = e.clientX - this.lx, dy = e.clientY - this.ly; this.lx = e.clientX; this.ly = e.clientY;
+    this.moved += Math.abs(dx) + Math.abs(dy);
+    this.yaw += dx * 0.005; this.pitch = clamp(this.pitch + dy * 0.005, -1.2, 1.2);   // como no Street View: o mundo acompanha o dedo
+    this.head = this.gesture = true;
+  }
+  up(e) {
+    if (e.pointerId !== this.look) return;
+    this.look = null; try { this.dom.releasePointerCapture(e.pointerId); } catch (_) {}
+    if (this.moved < 6 && this.btn === 0 && e.type === 'pointerup') this.card._onClick(e);   // toque curto = clique (luz, porta, piso…)
+  }
+  key(e, down) {
+    const t = e.composedPath ? e.composedPath()[0] : e.target;
+    if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || '')) return;   // digitando em outro campo da página
+    const c = e.code;
+    if (t && t.closest && t.closest('.menu, .sizer')) return;   // teclas dentro do menu de opções (↑/↓, Enter) são do menu; na borda do painel, ←/→ são da largura
+    if (c === 'Escape') { if ((this.card._menuBtn && this.card._menuBtn.getAttribute('aria-expanded') === 'true') || this.card._room) return; if (down) { e.stopPropagation(); this.card._setWalk(false); } return; }   // Esc com o menu aberto só fecha ele; com um cômodo no painel, volta à visão geral
+    if (c === 'Enter' || c === 'KeyF') {   // interagir: abre/fecha a porta mais perto e à frente (E já é "girar")
+      if (t && t !== this.card._canvas && t !== document.body && t !== document.documentElement) return;   // Enter em botões/links da página segue normal
+      if (down && !e.repeat) this.card._doorInteract();
+      e.preventDefault(); e.stopPropagation(); return;
+    }
+    if (/^(Key[WASDQE]|Arrow(Up|Down|Left|Right)|Shift(Left|Right))$/.test(c)) {
+      if (down) { this.keys.add(c); this.gesture = true; } else this.keys.delete(c);
+      if (!c.startsWith('Shift')) { e.preventDefault(); e.stopPropagation(); }   // a página não rola e os atalhos do HA não disparam
+    }
+  }
+  // joystick na tela: zona morta 0,15; o vetor (x direita, y frente) vai em this.joy
+  _joyBind() {
+    const el = this.card._joy; if (!el) return;
+    const knob = el.firstElementChild; let id = null;
+    const set = (e) => {
+      const r = el.getBoundingClientRect(), R = r.width / 2;
+      let dx = (e.clientX - r.left - R) / R, dy = (e.clientY - r.top - R) / R; const l = Math.hypot(dx, dy);
+      if (l > 1) { dx /= l; dy /= l; }
+      knob.style.transform = `translate(${dx * R * 0.6}px, ${dy * R * 0.6}px)`;
+      const m = Math.hypot(dx, dy), s = m < 0.15 ? 0 : (m - 0.15) / 0.85;   // zona morta; depois cresce até 1
+      this.joy.x = m ? dx / m * s : 0; this.joy.y = m ? -dy / m * s : 0; this.gesture = true;
+    };
+    el.addEventListener('pointerdown', (e) => { if (id != null) return; id = e.pointerId; try { el.setPointerCapture(id); } catch (_) {} e.stopPropagation(); e.preventDefault(); set(e); });
+    el.addEventListener('pointermove', (e) => { if (e.pointerId === id) { e.stopPropagation(); set(e); } });
+    const end = (e) => { if (e.pointerId !== id) return; e.stopPropagation(); id = null; this._joyReset(); };
+    el.addEventListener('pointerup', end); el.addEventListener('pointercancel', end);
+    this._joyReset = () => { this.joy.x = this.joy.y = 0; knob.style.transform = ''; };
+  }
+  update(dt) {
+    const c = this.card, o = c._orbit, k = this.keys, now = performance.now();
+    const wasDirty = this.dirty || o.dirty; this.dirty = false; o.dirty = false;
+    // entrada: teclado (−1…1) + joystick
+    let iy = (k.has('KeyW') || k.has('ArrowUp') ? 1 : 0) - (k.has('KeyS') || k.has('ArrowDown') ? 1 : 0) + this.joy.y;
+    let ix = (k.has('KeyD') || k.has('ArrowRight') ? 1 : 0) - (k.has('KeyA') || k.has('ArrowLeft') ? 1 : 0) + this.joy.x;
+    const turn = (k.has('KeyQ') ? 1 : 0) - (k.has('KeyE') ? 1 : 0);
+    if (this.path && (iy || ix || turn)) this.stop(false);   // o teclado / joystick assume o comando
+    if (turn) { this.yaw += turn * 1.6 * dt; this.head = true; }
+    const l = Math.hypot(ix, iy); if (l > 1) { ix /= l; iy /= l; }
+    const fx = -Math.sin(this.yaw), fz = -Math.cos(this.yaw), rx = Math.cos(this.yaw), rz = -Math.sin(this.yaw);   // frente e direita no piso
+    const sp = 1.6 * (k.has('ShiftLeft') || k.has('ShiftRight') ? 2 : 1);
+    let gx = (fx * iy + rx * ix) * sp, gz = (fz * iy + rz * ix) * sp;
+    // caminhada até o ponto clicado: vira o corpo para o rumo e anda pelos pontos do caminho (já livre de paredes)
+    const P = this.path; let can = false;
+    if (P) {
+      const [tx, tz] = P.pts[P.i], dx = tx - this.pos.x, dz = tz - this.pos.z, dd = Math.hypot(dx, dz), lastPt = P.i === P.pts.length - 1;
+      if (dd < (lastPt ? 0.1 : 0.16)) { P.i++; if (P.i >= P.pts.length) this.stop(true); }
+      else {
+        let err = Math.atan2(-dx, -dz) - this.yaw; err = Math.atan2(Math.sin(err), Math.cos(err));
+        if (this.look == null) { const st = clamp(err, -4.5 * dt, 4.5 * dt); this.yaw += st; err -= st; this.head = true; }
+        const ali = Math.max(0, Math.cos(err)), spd = 1.75 * (lastPt ? clamp(dd * 2.5, 0.3, 1) : 1) * (ali > 0.8 ? 1 : ali * ali);
+        gx = dx / dd * spd; gz = dz / dd * spd; can = ali > 0.8;
+      }
+    }
+    const kv = 1 - Math.exp(-dt * 10);
+    this.vel.x += (gx - this.vel.x) * kv; this.vel.z += (gz - this.vel.z) * kv;
+    if (!gx && !gz && Math.hypot(this.vel.x, this.vel.z) < 0.02) this.vel.set(0, 0, 0);
+    const walking = this.vel.x !== 0 || this.vel.z !== 0;
+    if (walking) { const r = c._walkCollide(this.pos.x, this.pos.z, this.pos.x + this.vel.x * dt, this.pos.z + this.vel.z * dt); this.pos.x = r[0]; this.pos.z = r[1]; }
+    if (this.path) {   // travou numa parede / móvel do caminho: refaz o caminho daqui (até 3×) ou para onde deu para chegar
+      const Q = this.path; if (can) Q.t += dt; else Q.t = 0;
+      if (Q.t > 0.6) {
+        if (Math.hypot(this.pos.x - Q.px, this.pos.z - Q.pz) < 0.07) { if (Q.tries++ < 3) c._walkReplan(); else this.stop(true); }
+        Q.px = this.pos.x; Q.pz = this.pos.z; Q.t = 0;
+      }
+    }
+    const moving = walking || this.head;
+    // câmera
+    const cp = Math.cos(this.pitch), cam = this.camera;
+    cam.position.copy(this.pos);
+    cam.lookAt(this.pos.x + fx * cp, this.pos.y + Math.sin(this.pitch), this.pos.z + fz * cp);
+    // espelha nas flags do Orbit (o resto do cartão lê estas)
+    o.moving = moving; o.touched = true;
+    if (this.gesture || moving) o.userAt = now;
+    o.target.set(this.pos.x + fx * 4, this.pos.y, this.pos.z + fz * 4); o.targetGoal.copy(o.target);
+    this.head = this.gesture = false; this.moving = moving;
+    return wasDirty || moving;
+  }
+}
+// @rooms-begin
+function roomQuartoCasal(ctx) {
+  // QUARTO CASAL — x 0–3,6 · z 0–4,2. Faces internas: x 0,075/3,525 · z 0,075/4,125.
+  // Janela fundo (z=0) x 1,2–2,4 · porta (z=4,2) x 1,0–1,9 (abre p/ dentro, dobradiça em x=1,0) · janela frente x 2,5–3,3.
+  // Layout: cama centrada na janela do fundo, criados dos dois lados, banco ao pé, guarda-roupa na parede
+  // esquerda (x=0), cômoda + espelho na parede direita (x=3,6), planta no canto da janela da frente.
+  const { THREE, M, box, cyl, sph, place, add, std, rnd } = ctx;
+  const G = () => new THREE.Group();
+  const put = (m, x, y, z, rx = 0, ry = 0, rz = 0) => { m.position.set(x, y, z); m.rotation.set(rx, ry, rz); return m; };
+
+  // ---------------- paleta (estilo do vídeo): nogueira + linho creme + oliva/terracota, preto fosco, luz âmbar ----------------
+  const walnut    = std({ color: 0x5e4330, roughness: 0.62 });
+  const walnutDk  = std({ color: 0x3b2a1e, roughness: 0.6 });
+  const offWhite  = std({ color: 0xe6dfd3, roughness: 0.55 });
+  const trim      = std({ color: 0xf4f0e8, roughness: 0.6 });
+  const linen     = std({ color: 0xf1ede4, roughness: 0.95 });   // roupa de cama branca
+  const upholst   = std({ color: 0xd9cfbc, roughness: 0.95 });   // cabeceira estofada
+  const black     = std({ color: 0x181818, roughness: 0.55 });
+  const linenLt   = std({ color: 0xf8f5ee, roughness: 0.95 });
+  const greige    = std({ color: 0xc6b7a3, roughness: 0.95 });
+  const rugField  = std({ color: 0xded5c1, roughness: 1 });
+  const vinho     = std({ color: 0x6b7040, roughness: 0.95 });   // verde-oliva (nome antigo mantido)
+  const vinhoDk   = std({ color: 0xcdc2ab, roughness: 1 });
+  const terracota = std({ color: 0xb5623f, roughness: 0.9 });
+  const rose      = std({ color: 0xc79b8e, roughness: 0.95 });
+  const sand      = std({ color: 0xd8cab4, roughness: 0.95 });
+  const brass     = std({ color: 0x262624, roughness: 0.5, metalness: 0.3 });   // preto fosco
+  const ceramic   = std({ color: 0xb6705a, roughness: 0.4 });
+  const wicker    = std({ color: 0xc2a06a, roughness: 1 });
+  const potMat    = std({ color: 0xe6e0d4, roughness: 0.6 });
+  const amber     = std({ color: 0xc98a3c, roughness: 0.15, metalness: 0.1, transparent: true, opacity: 0.75 });
+  const artA      = std({ color: 0xb5623f, roughness: 0.9 });
+  const artB      = std({ color: 0x9aa58a, roughness: 0.9 });
+  const artC      = std({ color: 0xd9cfbf, roughness: 0.9 });
+  const shadeMat  = new THREE.MeshStandardMaterial({ color: 0xf6e6c8, emissive: 0xffb866, emissiveIntensity: 0.85, roughness: 0.9, side: THREE.DoubleSide });
+  const ledMat    = std({ color: 0xffd9a0, emissive: 0xffa94d, emissiveIntensity: 1.4 });
+  const sheerMat  = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.9, transparent: true, opacity: 0.4, side: THREE.DoubleSide, depthWrite: false });
+
+  // ---------------- builders locais ----------------
+  // "puff": bloco w×h×d com todas as arestas arredondadas (raio r) — colchão, edredom, travesseiros, almofadas…
+  const puff = (w, h, d, mat, r = 0.03) => {
+    r = Math.min(r, w * 0.45, h * 0.45, d * 0.45);
+    const sw = w - 2 * r, sd = d - 2 * r, c = Math.min(r, sw / 2, sd / 2);
+    const s = new THREE.Shape();
+    s.moveTo(-sw / 2 + c, -sd / 2);
+    s.lineTo(sw / 2 - c, -sd / 2);  s.absarc(sw / 2 - c, -sd / 2 + c, c, -Math.PI / 2, 0, false);
+    s.lineTo(sw / 2, sd / 2 - c);   s.absarc(sw / 2 - c, sd / 2 - c, c, 0, Math.PI / 2, false);
+    s.lineTo(-sw / 2 + c, sd / 2);  s.absarc(-sw / 2 + c, sd / 2 - c, c, Math.PI / 2, Math.PI, false);
+    s.lineTo(-sw / 2, -sd / 2 + c); s.absarc(-sw / 2 + c, -sd / 2 + c, c, Math.PI, Math.PI * 1.5, false);
+    const g = new THREE.ExtrudeGeometry(s, { depth: h - 2 * r, bevelEnabled: true, bevelThickness: r, bevelSize: r, bevelOffset: 0, bevelSegments: 3, curveSegments: 5, steps: 1 });
+    g.translate(0, 0, -(h - 2 * r) / 2); g.rotateX(-Math.PI / 2);   // eixo da extrusão → +y; origem no centro
+    const m = new THREE.Mesh(g, mat); m.castShadow = true; m.receiveShadow = true; return m;
+  };
+  // painel de cortina pregueado: fita ondulada (plano XZ) extrudada na altura; origem na base, centro em x
+  const curtain = (w, h, mat) => {
+    const waves = Math.max(2, Math.round(w / 0.11)), A = 0.028, t = 0.022, n = waves * 8;
+    const wave = (i) => A * Math.sin((i / n) * Math.PI * 2 * waves);
+    const s = new THREE.Shape();
+    s.moveTo(0, wave(0));
+    for (let i = 1; i <= n; i++) s.lineTo((i / n) * w, wave(i));
+    for (let i = n; i >= 0; i--) s.lineTo((i / n) * w, wave(i) + t);
+    s.closePath();
+    const g = new THREE.ExtrudeGeometry(s, { depth: h, bevelEnabled: false, steps: 1 });
+    g.translate(-w / 2, -t / 2, 0); g.rotateX(-Math.PI / 2);
+    const m = new THREE.Mesh(g, mat); m.castShadow = true; m.receiveShadow = true; return m;
+  };
+  const rod = (x0, x1, y, z) => {          // varão de cortina em latão com ponteiras
+    const r = cyl(0.012, 0.012, x1 - x0, brass, (x0 + x1) / 2, y, z, 10); r.rotation.z = Math.PI / 2; add(r);
+    add(sph(0.024, brass, x0 - 0.02, y, z)); add(sph(0.024, brass, x1 + 0.02, y, z));
+  };
+  const picture = (w, h, art) => {         // quadro: moldura escura + tela; face para +z local
+    const g = G();
+    g.add(box(w, h, 0.03, walnutDk, 0, 0, 0));
+    g.add(box(w - 0.06, h - 0.06, 0.01, art, 0, 0, 0.015, { cast: false }));
+    return g;
+  };
+  const feet = (g, w, d, h, inset, s) => { // 4 pés quadrados de madeira escura
+    for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) g.add(box(s, h, s, walnutDk, sx * (w / 2 - inset), h / 2, sz * (d / 2 - inset)));
+  };
+
+  // Cama de casal (origem no centro da base do colchão; cabeceira em -z)
+  const bed = (w, l) => {
+    const g = G();
+    g.add(box(w - 0.12, 0.10, l - 0.12, black, 0, 0.05, 0));                      // base recuada escura (cama flutuante)
+    g.add(box(w, 0.22, l, walnut, 0, 0.21, 0));                                    // box / estrado
+    g.add(put(puff(w - 0.04, 0.22, l - 0.04, M.mattress, 0.05), 0, 0.43, 0));     // colchão
+    g.add(put(puff(w + 0.50, 1.0, 0.12, upholst, 0.05), 0, 0.55, -l / 2 - 0.04));  // cabeceira estofada larga
+    g.add(box(w + 0.3, 0.012, 0.012, ledMat, 0, 1.06, -l / 2 + 0.03, { cast: false })); // LED no topo da cabeceira
+    g.add(put(puff(w + 0.10, 0.09, l - 0.60, linen, 0.04), 0, 0.585, 0.30));      // edredom
+    g.add(put(puff(w + 0.10, 0.07, 0.34, linenLt, 0.03), 0, 0.635, -l / 2 + 0.77)); // dobra virada (avesso claro)
+    g.add(box(w + 0.10, 0.30, 0.04, linen, 0, 0.45, l / 2 + 0.02));               // caída do edredom no pé
+    g.add(put(puff(w + 0.14, 0.06, 0.48, vinho, 0.025), 0, 0.655, l / 2 - 0.32));  // manta vinho dobrada
+    for (const sx of [-1, 1]) g.add(put(puff(0.68, 0.15, 0.42, linenLt, 0.05), sx * 0.40, 0.64, -l / 2 + 0.25, 0.20, sx * 0.03)); // travesseiros
+    for (const sx of [-1, 1]) g.add(put(puff(0.44, 0.12, 0.44, vinho, 0.05), sx * 0.36, 0.76, -l / 2 + 0.40, 1.15));            // almofadas encostadas
+    g.add(put(puff(0.55, 0.11, 0.28, terracota, 0.045), 0, 0.66, -l / 2 + 0.52, 0.95));                                          // almofada lombar
+    return g;
+  };
+  // Criado-mudo 0,50×0,55×0,42: pés, gaveta em cima (frente clara + puxador latão) e nicho aberto embaixo
+  const nightstand = () => {
+    const g = G(), w = 0.5, d = 0.42;
+    feet(g, w, d, 0.12, 0.04, 0.035);
+    g.add(box(w, 0.20, d, walnut, 0, 0.42, 0));                       // corpo da gaveta
+    for (const sx of [-1, 1]) g.add(box(0.02, 0.20, d, walnut, sx * (w / 2 - 0.01), 0.22, 0)); // laterais do nicho
+    g.add(box(w, 0.02, d, walnut, 0, 0.13, 0));                       // fundo do nicho
+    g.add(box(w + 0.04, 0.03, d + 0.04, walnutDk, 0, 0.535, 0));      // tampo
+    g.add(box(w - 0.06, 0.15, 0.015, offWhite, 0, 0.42, d / 2 + 0.0075));
+    g.add(box(0.12, 0.012, 0.02, brass, 0, 0.42, d / 2 + 0.025));
+    return g;
+  };
+  const lamp = (x, z) => {                 // abajur sobre o criado (tampo em y 0,55)
+    add(cyl(0.05, 0.075, 0.16, ceramic, x, 0.63, z, 14));
+    add(cyl(0.008, 0.008, 0.14, brass, x, 0.78, z, 8));
+    add(cyl(0.09, 0.135, 0.17, shadeMat, x, 0.915, z, 18, true));
+  };
+  const slipper = (x, z, ry, y0) => {      // chinelo: sola + tira
+    const g = G();
+    g.add(box(0.10, 0.02, 0.26, M.tan, 0, 0.01, 0));
+    g.add(box(0.10, 0.045, 0.05, vinho, 0, 0.04, -0.05));
+    place(g, x, z, ry, y0);
+  };
+  const bench = () => {                    // banco estofado ao pé da cama + manta dobrada
+    const g = G(), w = 1.2, d = 0.42;
+    feet(g, w, d, 0.33, 0.06, 0.04);
+    g.add(box(w, 0.05, d, walnut, 0, 0.355, 0));
+    g.add(put(puff(w - 0.02, 0.09, d - 0.02, greige, 0.035), 0, 0.425, 0));
+    g.add(put(puff(0.40, 0.07, 0.30, terracota, 0.03), 0.32, 0.505, 0, 0, 0.08));
+    return g;
+  };
+  // Guarda-roupa 3 portas (portas em +z local): carcaça nogueira, portas off-white, porta central espelhada
+  const wardrobe = (w, h, d) => {
+    const g = G();
+    g.add(box(w - 0.06, 0.08, d - 0.06, walnutDk, 0, 0.04, 0));          // rodapé recuado
+    g.add(box(w, h - 0.08, d, walnut, 0, 0.08 + (h - 0.08) / 2, 0));
+    g.add(box(w + 0.03, 0.03, d + 0.03, walnutDk, 0, h + 0.015, 0));     // tampo saliente
+    const dw = w / 3 - 0.02, dh = h - 0.2;
+    for (let i = 0; i < 3; i++) {
+      const cx = -w / 2 + ((i + 0.5) * w) / 3;
+      g.add(box(dw, dh, 0.02, offWhite, cx, 0.1 + dh / 2, d / 2 + 0.01));                 // portas lisas, sem puxador aparente
+      g.add(box(0.006, dh, 0.004, black, cx + dw / 2 + 0.01, 0.1 + dh / 2, d / 2 + 0.02, { cast: false }));
+    }
+    return g;
+  };
+  // Cômoda 1,00×0,85×0,45 com 3 gavetas (frente em +z local)
+  const dresser = () => {
+    const g = G(), w = 1.0, d = 0.45;
+    feet(g, w, d, 0.14, 0.04, 0.035);
+    g.add(box(w, 0.68, d, walnut, 0, 0.48, 0));
+    g.add(box(w + 0.04, 0.03, d + 0.04, walnutDk, 0, 0.835, 0));
+    for (let i = 0; i < 3; i++) {
+      const y = 0.2625 + i * 0.2175;
+      g.add(box(w - 0.08, 0.19, 0.015, offWhite, 0, y, d / 2 + 0.0075));
+      g.add(box(0.24, 0.012, 0.02, brass, 0, y, d / 2 + 0.025));
+    }
+    return g;
+  };
+  const plant = () => {                    // pacová em vaso cerâmico claro: folhas = esferas achatadas
+    const g = G();
+    g.add(cyl(0.14, 0.11, 0.30, potMat, 0, 0.15, 0, 16));
+    g.add(cyl(0.125, 0.125, 0.02, M.soil, 0, 0.30, 0, 14));
+    g.add(cyl(0.012, 0.018, 0.75, M.trunk, 0, 0.675, 0, 8));
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2 + rnd() * 0.5, r = 0.08 + rnd() * 0.02;
+      const leaf = sph(0.14, i % 2 ? M.plant : M.leaf2, Math.cos(a) * r, 0.74 + i * 0.09 + rnd() * 0.04, Math.sin(a) * r);
+      leaf.scale.set(1, 0.16, 0.6); leaf.rotation.set(0, -a, 0.25 + rnd() * 0.3);
+      g.add(leaf);
+    }
+    return g;
+  };
+  const rug = () => {                      // tapete grande: borda vinho escura, campo greige, 2 listras terracota por lado
+    const g = G();
+    g.add(box(2.0, 0.010, 2.2, vinhoDk, 0, 0.005, 0, { cast: false }));
+    g.add(box(1.84, 0.012, 2.04, rugField, 0, 0.011, 0, { cast: false }));
+    for (const sx of [-0.80, -0.70, 0.70, 0.80]) g.add(box(0.04, 0.004, 2.04, terracota, sx, 0.019, 0, { cast: false }));
+    return g;
+  };
+
+  // ---------------- rodapé (4 paredes, pulando o vão da porta) ----------------
+  const base = (w, d, x, z) => add(box(w, 0.08, d, trim, x, 0.04, z, { cast: false }));
+  base(3.45, 0.015, 1.8, 0.0825);      // fundo
+  base(0.015, 4.05, 0.0825, 2.1);      // esquerda
+  base(0.015, 4.05, 3.5175, 2.1);      // direita
+  base(0.925, 0.015, 0.5375, 4.1175);  // frente, à esquerda da porta
+  base(1.625, 0.015, 2.7125, 4.1175);  // frente, à direita da porta
+
+  // ---------------- tapete + cama + criados + abajures + objetos ----------------
+  place(rug(), 1.8, 2.10);                                   // x 0,8–2,8 · z 1,0–3,2 (livre do giro da porta)
+  place(bed(1.6, 1.9), 1.8, 1.32);                           // cabeceira encostada em z 0,27; colchão z 0,39–2,25
+  place(nightstand(), 0.66, 0.35); place(nightstand(), 2.94, 0.35);
+  lamp(0.66, 0.27); lamp(2.94, 0.27);
+  // criado esquerdo: dois livros e celular
+  add(box(0.15, 0.028, 0.21, M.book[1], 0.55, 0.564, 0.46));
+  add(put(box(0.13, 0.02, 0.19, M.book[3], 0, 0, 0), 0.555, 0.588, 0.465, 0, 0.12));
+  add(put(box(0.07, 0.008, 0.15, M.dark, 0, 0, 0), 0.82, 0.554, 0.45, 0, 0.35));
+  // criado direito: copo d'água e despertador digital
+  const glassCup = cyl(0.034, 0.03, 0.09, M.glass, 3.07, 0.595, 0.47, 12); glassCup.castShadow = false; add(glassCup);
+  add(box(0.09, 0.07, 0.035, M.dark, 2.80, 0.585, 0.45));
+  add(box(0.07, 0.045, 0.004, M.screenOff, 2.80, 0.585, 0.4695, { cast: false }));
+  // chinelos nos dois lados da cama (sobre o tapete)
+  slipper(0.86, 1.50, 0.12, 0.017); slipper(0.97, 1.53, -0.08, 0.017);
+  slipper(2.63, 1.22, -0.10, 0.017); slipper(2.74, 1.25, 0.06, 0.017);
+  place(bench(), 1.8, 2.59);                                 // z 2,38–2,80, ao pé da cama
+
+  // ---------------- guarda-roupa (parede esquerda) + cesto de roupa ----------------
+  place(wardrobe(1.7, 2.1, 0.6), 0.455, 3.15, Math.PI / 2);  // x 0,155–0,775 · z 2,30–4,00; portas para +x
+  add(cyl(0.17, 0.15, 0.50, wicker, 0.33, 0.25, 2.0, 14));
+  add(cyl(0.185, 0.185, 0.03, wicker, 0.33, 0.515, 2.0, 14));
+
+  // ---------------- cômoda com espelho redondo (parede direita) + objetos ----------------
+  place(dresser(), 3.22, 2.95, -Math.PI / 2);                // x 2,995–3,445 · z 2,45–3,45; frente para -x
+  const mirrorFrame = cyl(0.29, 0.29, 0.02, walnutDk, 3.514, 1.45, 2.95, 28); mirrorFrame.rotation.z = Math.PI / 2; add(mirrorFrame);
+  const mirrorGlass = cyl(0.26, 0.26, 0.006, M.mirror, 3.501, 1.45, 2.95, 28); mirrorGlass.rotation.z = Math.PI / 2; mirrorGlass.castShadow = false; add(mirrorGlass);
+  add(box(0.30, 0.015, 0.20, brass, 3.28, 0.8575, 2.70));                 // bandeja
+  add(box(0.05, 0.10, 0.03, amber, 3.24, 0.915, 2.66));                   // perfumes
+  add(box(0.04, 0.13, 0.04, amber, 3.33, 0.93, 2.73));
+  add(put(box(0.012, 0.15, 0.12, walnutDk, 0, 0, 0), 3.30, 0.925, 3.15, 0, 0, -0.12)); // porta-retrato inclinado
+  add(cyl(0.035, 0.035, 0.06, linenLt, 3.25, 0.88, 3.32, 12));            // vela
+  place(plant(), 3.20, 3.74);                                              // canto junto à janela da frente
+
+  // ---------------- janela do fundo: persiana rolô (meio aberta) + cortinas de linho ----------------
+  const roller = cyl(0.03, 0.03, 1.18, linenLt, 1.8, 2.21, 0.115, 12); roller.rotation.z = Math.PI / 2; add(roller);
+  add(box(1.16, 0.62, 0.008, linenLt, 1.8, 1.90, 0.115, { cast: false }));
+  add(box(1.18, 0.025, 0.02, walnutDk, 1.8, 1.585, 0.115));
+  rod(0.94, 2.66, 2.37, 0.20);
+  add(put(curtain(0.32, 2.31, sand), 1.12, 0.03, 0.20));
+  add(put(curtain(0.32, 2.31, sand), 2.48, 0.03, 0.20));
+
+  // ---------------- janela da frente: voil + cortinas de linho ----------------
+  rod(2.32, 3.48, 2.37, 4.04);
+  add(put(curtain(0.32, 2.31, sand), 2.50, 0.03, 4.04));
+  add(put(curtain(0.32, 2.31, sand), 3.34, 0.03, 4.04));
+  add(box(0.80, 1.26, 0.008, sheerMat, 2.90, 1.69, 4.085, { cast: false, receive: false }));
+
+  // ---------------- quadros ----------------
+  place(picture(0.38, 0.50, artA), 0.09, 1.05, Math.PI / 2, 1.55);      // parede esquerda, par de quadros
+  place(picture(0.38, 0.50, artB), 0.09, 1.55, Math.PI / 2, 1.55);
+  place(picture(0.75, 0.50, artC), 3.51, 1.45, -Math.PI / 2, 1.55);     // parede direita, quadro largo
+  const sun = cyl(0.11, 0.11, 0.006, terracota, 3.487, 1.58, 1.30, 20); sun.rotation.z = Math.PI / 2; sun.castShadow = false; add(sun);
+
+  // ---------------- parede da frente: cabideiro com roupão, interruptor ----------------
+  add(box(0.40, 0.06, 0.02, walnutDk, 2.20, 1.78, 4.115));
+  for (const hx of [2.11, 2.29]) { const hook = cyl(0.009, 0.009, 0.06, brass, hx, 1.76, 4.08, 8); hook.rotation.x = Math.PI / 2; add(hook); }
+  add(put(puff(0.28, 0.95, 0.09, rose, 0.04), 2.18, 1.235, 4.05));
+  add(box(0.30, 0.03, 0.10, sand, 2.18, 1.02, 4.05));                      // cinto do roupão
+  add(box(0.08, 0.12, 0.012, M.white, 1.98, 1.15, 4.119, { cast: false })); // interruptor ao lado da porta
+}
+
+// Quarto / escritório (x 3,6–6,8 · z 0–4,2) — quarto de jovem adulto que também é home office.
+// Estilo minimalista do vídeo: carvalho claro + nogueira, creme/linho, verde-oliva e terracota em detalhe,
+// preto fosco nos eletrônicos, luz âmbar quente (luminária, fita LED). Layout inalterado.
+// Layout: escrivaninha no fundo sob a janela (luminária de mesa do cartão em 4,15/0,5 fica livre),
+// cadeira gamer, estante na parede x=3,6, guarda-roupa e rack sob a TV na parede x=6,8,
+// cama de solteiro ao longo da parede direita com a cabeceira sob a janela da frente
+// (fora do giro da porta x 4,1–5,0), criado ao lado, tapete no meio, planta e violão no canto esquerdo.
+function roomQuarto(ctx) {
+  const { THREE, box, cyl, sph, place, add, std, rnd, M } = ctx;
+  const G = () => new THREE.Group();
+
+  // ---- materiais do cômodo -------------------------------------------------
+  const woodL   = std({ color: 0xcaa878, roughness: 0.6 });    // carvalho claro (tampos, cama, estante)
+  const woodM   = std({ color: 0x5b3d29, roughness: 0.55 });   // nogueira (laterais, braço do violão)
+  const petrol  = std({ color: 0x6b7040, roughness: 0.9 });    // verde-oliva (acento; nome antigo mantido)
+  const petrolD = std({ color: 0x4d5330, roughness: 0.9 });
+  const terra   = std({ color: 0xb5623f, roughness: 0.9 });    // terracota em detalhe
+  const sage    = std({ color: 0x9aa58a, roughness: 0.92 });
+  const offw    = std({ color: 0xece6d8, roughness: 0.6 });    // branco quente liso (guarda-roupa, gaveteiro)
+  const white   = std({ color: 0xf4f0e8, roughness: 0.9 });    // roupa de cama branca
+  const upholst = std({ color: 0xd9cfbc, roughness: 0.95 });   // cabeceira estofada de linho
+  const fabric  = std({ color: 0x2c2f2f, roughness: 0.95 });   // tecido da cadeira
+  const keys    = std({ color: 0x4a4a48, roughness: 0.8 });
+  const grey    = std({ color: 0xc8c0b2, roughness: 0.9 });
+  const linen   = std({ color: 0xe9e3d7, roughness: 0.95 });
+  const blind   = std({ color: 0xe2dccb, roughness: 0.95 });
+  const curt    = std({ color: 0xdcd3be, roughness: 1 });      // cortina de linho
+  const spruce  = std({ color: 0xe3c893, roughness: 0.6 });    // tampo do violão
+  const ceramic = std({ color: 0xf1ece2, roughness: 0.5 });
+  const rugMat  = std({ color: 0xded5c1, roughness: 1 });
+  const glow    = std({ color: 0xffd9a0, emissive: 0xffa94d, emissiveIntensity: 1.4 });   // fita LED âmbar
+  const shade   = std({ color: 0xf6e6c8, emissive: 0xffb866, emissiveIntensity: 0.9, roughness: 0.9 });   // cúpula acesa
+  const bookMats = [linen, terra, petrol, sage, woodM, woodL];
+  // caixa com cantos verticais arredondados (origem no centro)
+  const rb = (w, h, d, mat, x, y, z, r = 0.04) => {
+    r = Math.min(r, w * 0.49, d * 0.49); const hw = w / 2, hd = d / 2, sh = new THREE.Shape();
+    sh.moveTo(-hw + r, -hd); sh.lineTo(hw - r, -hd); sh.absarc(hw - r, -hd + r, r, -Math.PI / 2, 0, false);
+    sh.lineTo(hw, hd - r); sh.absarc(hw - r, hd - r, r, 0, Math.PI / 2, false);
+    sh.lineTo(-hw + r, hd); sh.absarc(-hw + r, hd - r, r, Math.PI / 2, Math.PI, false);
+    sh.lineTo(-hw, -hd + r); sh.absarc(-hw + r, -hd + r, r, Math.PI, Math.PI * 1.5, false);
+    const g = new THREE.ExtrudeGeometry(sh, { depth: h, bevelEnabled: false, curveSegments: 5 });
+    g.rotateX(-Math.PI / 2); g.translate(0, -h / 2, 0);
+    const m = new THREE.Mesh(g, mat); m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; return m;
+  };
+  const torus = (r, t, arc, mat, x, y, z) => {
+    const m = new THREE.Mesh(new THREE.TorusGeometry(r, t, 8, 18, arc), mat);
+    m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; return m;
+  };
+
+  // ---- escrivaninha 1,6 × 0,7 encostada no fundo (tampo em y = 0,75) -------
+  {
+    const g = G();
+    g.add(box(1.6, 0.035, 0.7, woodL, 0, 0.7325, 0));                              // tampo fino de carvalho
+    g.add(box(0.04, 0.71, 0.64, woodM, -0.78, 0.355, 0));                         // lateral esquerda
+    g.add(box(0.04, 0.71, 0.64, woodM, 0.78, 0.355, 0));                          // lateral direita
+    g.add(box(1.52, 0.24, 0.03, woodM, 0, 0.59, -0.315));                         // travessa traseira
+    g.add(box(0.4, 0.58, 0.5, offw, 0.55, 0.29, 0.02));                        // gaveteiro
+    for (let i = 0; i < 3; i++) g.add(box(0.36, 0.165, 0.012, woodL, 0.55, 0.11 + i * 0.185, 0.276)); // frentes das gavetas
+    g.add(box(0.2, 0.42, 0.45, M.dark, -0.62, 0.21, 0.02));                       // gabinete do PC
+    g.add(box(0.2, 0.012, 0.012, glow, -0.62, 0.415, 0.25, { cast: false }));     // fita LED do gabinete
+    g.add(box(1.3, 0.012, 0.012, glow, 0.1, 0.765, -0.335, { cast: false }));     // fita LED atrás do monitor
+    place(g, 4.5, 0.55);
+  }
+
+  // ---- monitor 27" em pedestal ---------------------------------------------
+  {
+    const g = G();
+    g.add(box(0.26, 0.014, 0.17, M.dark, 0, 0.007, 0));
+    g.add(box(0.05, 0.28, 0.025, M.dark, 0, 0.15, -0.04));
+    g.add(box(0.62, 0.37, 0.025, M.dark, 0, 0.31, -0.02));
+    g.add(box(0.6, 0.35, 0.006, M.screenOff, 0, 0.31, -0.005, { cast: false }));
+    place(g, 4.64, 0.33, 0, 0.75);
+  }
+
+  // ---- notebook aberto, virado para quem senta ------------------------------
+  {
+    const g = G();
+    g.add(box(0.32, 0.016, 0.22, M.steel, 0, 0.008, 0));
+    g.add(box(0.26, 0.004, 0.1, keys, 0, 0.018, -0.02));
+    const lid = box(0.32, 0.215, 0.012, M.steel, 0, 0.12, -0.137); lid.rotation.x = -0.25; g.add(lid);
+    const scr = box(0.29, 0.185, 0.004, M.screenOff, 0, 0.122, -0.13, { cast: false }); scr.rotation.x = -0.25; g.add(scr);
+    place(g, 5.1, 0.52, -0.35, 0.757);
+  }
+
+  // ---- periféricos: mousepad, teclado, mouse, caneca, headset no suporte ----
+  add(box(0.8, 0.006, 0.32, upholst, 4.72, 0.753, 0.72, { cast: false }));        // desk mat de linho
+  add(box(0.44, 0.022, 0.14, M.dark, 4.6, 0.767, 0.72));                          // teclado
+  add(box(0.41, 0.006, 0.11, keys, 4.6, 0.781, 0.72, { cast: false }));           // teclas
+  const mouse = sph(0.032, M.dark, 4.98, 0.775, 0.74); mouse.scale.set(1, 0.6, 1.4); add(mouse);
+  add(cyl(0.04, 0.035, 0.09, ceramic, 5.19, 0.795, 0.82, 14));                    // caneca
+  add(cyl(0.05, 0.05, 0.01, M.dark, 5.2, 0.755, 0.26, 12));                       // suporte do headset
+  add(cyl(0.008, 0.008, 0.24, M.dark, 5.2, 0.875, 0.26, 8));
+  add(box(0.08, 0.02, 0.04, M.dark, 5.2, 1.0, 0.26));
+  add(torus(0.075, 0.012, Math.PI, M.dark, 5.2, 0.915, 0.26));                    // arco do headset
+  for (const s of [-1, 1]) { const c = cyl(0.04, 0.04, 0.025, petrol, 5.2 + s * 0.075, 0.915, 0.26, 12); c.rotation.z = Math.PI / 2; add(c); } // conchas
+
+  // ---- cadeira gamer de encosto alto (virada para a mesa) -------------------
+  {
+    const g = G();
+    for (let i = 0; i < 5; i++) {
+      const a = (i / 5) * Math.PI * 2;
+      const sp = box(0.3, 0.03, 0.045, M.dark, Math.cos(a) * 0.15, 0.045, Math.sin(a) * 0.15); sp.rotation.y = -a; g.add(sp);
+      g.add(sph(0.03, M.dark, Math.cos(a) * 0.29, 0.03, Math.sin(a) * 0.29));       // rodízios
+    }
+    g.add(cyl(0.03, 0.03, 0.36, M.chrome, 0, 0.24, 0, 10));                          // pistão
+    g.add(box(0.52, 0.11, 0.52, fabric, 0, 0.47, 0.02));                             // assento
+    g.add(box(0.2, 0.114, 0.3, petrol, 0, 0.47, 0.07));                              // faixa central
+    const back = box(0.5, 0.86, 0.09, fabric, 0, 0.98, -0.26); back.rotation.x = -0.1; g.add(back);       // encosto alto
+    const stripe = box(0.16, 0.7, 0.094, petrol, 0, 0.98, -0.26); stripe.rotation.x = -0.1; g.add(stripe);
+    const head = box(0.26, 0.11, 0.07, petrolD, 0, 1.31, -0.21); head.rotation.x = -0.1; g.add(head);     // almofada da cabeça
+    const lumbar = box(0.3, 0.14, 0.06, petrolD, 0, 0.72, -0.16); lumbar.rotation.x = -0.1; g.add(lumbar); // lombar
+    for (const s of [-1, 1]) { g.add(box(0.05, 0.22, 0.05, M.dark, s * 0.29, 0.6, 0)); g.add(box(0.08, 0.03, 0.26, M.dark, s * 0.29, 0.725, 0)); } // braços
+    place(g, 4.5, 1.3, Math.PI);
+  }
+
+  // ---- estante 1,4 × 1,9 na parede x = 3,6 com livros e objetos -------------
+  {
+    const g = G(); const w = 1.4, d = 0.3, h = 1.9;
+    g.add(box(0.03, h, d, woodL, -w / 2 + 0.015, h / 2, 0)); g.add(box(0.03, h, d, woodL, w / 2 - 0.015, h / 2, 0));
+    g.add(box(w, 0.03, d, woodL, 0, h - 0.015, 0));
+    g.add(box(w, h, 0.012, offw, 0, h / 2, -d / 2 + 0.006));                       // fundo branco
+    for (const y of [0.05, 0.52, 0.99, 1.46]) g.add(box(w - 0.06, 0.025, d - 0.02, woodL, 0, y, 0.01));
+    // fileira de livros a partir de x0 na prateleira y (no máximo n)
+    const books = (y, x0, x1, n) => {
+      let x = x0, k = 0;
+      while (x < x1 - 0.04 && k < n) {
+        const bw = 0.035 + rnd() * 0.05, bh = 0.17 + rnd() * 0.1, bd = 0.18 + rnd() * 0.05;
+        g.add(box(bw, bh, bd, bookMats[Math.floor(rnd() * bookMats.length)], x + bw / 2, y + 0.0125 + bh / 2, 0.01));
+        x += bw + 0.004; k++;
+      }
+      return x;
+    };
+    g.add(box(0.3, 0.26, 0.26, petrol, -0.5, 0.1925, 0)); g.add(box(0.3, 0.26, 0.26, grey, -0.17, 0.1925, 0)); // caixas organizadoras
+    books(0.05, 0.02, 0.62, 4);
+    books(0.52, -0.62, 0.62, 8);
+    const xe = books(0.99, -0.62, 0.05, 5);
+    g.add(cyl(0.05, 0.04, 0.09, ceramic, xe + 0.12, 1.0475, 0, 10)); g.add(sph(0.08, M.leaf2, xe + 0.12, 1.15, 0)); // vasinho
+    g.add(box(0.13, 0.16, 0.012, woodM, 0.45, 1.0825, -0.02));                        // porta-retrato
+    const xt = books(1.46, -0.62, -0.2, 3);
+    g.add(box(0.28, 0.05, 0.2, M.book[1], xt + 0.16, 1.4975, 0));                     // pilha deitada
+    g.add(box(0.26, 0.04, 0.19, M.book[3], xt + 0.16, 1.5425, 0));
+    g.add(cyl(0.05, 0.05, 0.16, M.dark, 0.25, 1.5525, 0, 12));                        // caixa de som
+    g.add(cyl(0.04, 0.045, 0.02, M.dark, 0.52, 1.4825, 0, 10)); g.add(sph(0.075, terra, 0.52, 1.5775, 0)); // globo
+    place(g, 3.83, 2.4, Math.PI / 2);
+  }
+
+  // ---- cama de solteiro 1,0 × 1,9 na parede direita, cabeceira sob a janela da frente
+  {
+    const g = G();
+    g.add(box(0.9, 0.08, 1.8, woodM, 0, 0.04, 0));                                    // rodapé recuado
+    g.add(box(1.0, 0.2, 1.9, woodL, 0, 0.18, 0));                                     // estrado
+    g.add(box(0.94, 0.18, 1.84, M.mattress, 0, 0.37, 0));                             // colchão
+    g.add(rb(0.98, 0.09, 1.34, white, 0, 0.5, 0.28, 0.05));                          // edredom branco
+    for (const s of [-1, 1]) g.add(box(0.03, 0.2, 1.34, white, s * 0.49, 0.42, 0.28)); // caídas laterais
+    g.add(rb(1.02, 0.11, 0.5, petrol, 0, 0.52, 0.72, 0.04));                          // manta verde-oliva no pé
+    g.add(box(0.98, 0.025, 0.2, linen, 0, 0.557, -0.29));                             // virada do lençol
+    g.add(box(0.6, 0.1, 0.38, offw, 0, 0.51, -0.68));                              // travesseiro
+    const cush = rb(0.34, 0.06, 0.26, terra, 0.14, 0.7, -0.84, 0.04); cush.rotation.x = 1.2; g.add(cush); // almofada na cabeceira
+    g.add(rb(1.22, 0.86, 0.09, upholst, 0, 0.55, -0.97, 0.05));                         // cabeceira estofada larga
+    g.add(box(1.0, 0.012, 0.012, glow, 0, 0.99, -0.915, { cast: false }));            // LED atrás da cabeceira
+    place(g, 6.14, 3.1, Math.PI);
+  }
+
+  // ---- criado-mudo pequeno junto à cabeceira --------------------------------
+  {
+    const g = G();
+    g.add(rb(0.38, 0.48, 0.38, woodM, 0, 0.26, 0, 0.02));
+    g.add(rb(0.4, 0.03, 0.4, woodL, 0, 0.515, 0, 0.02));
+    g.add(box(0.32, 0.16, 0.012, woodL, 0, 0.36, 0.19));                              // frente da gaveta
+    g.add(box(0.1, 0.012, 0.01, M.chrome, 0, 0.36, 0.2));
+    g.add(cyl(0.045, 0.06, 0.1, ceramic, 0.07, 0.585, 0, 20));                         // luminária: base
+    g.add(cyl(0.075, 0.1, 0.13, shade, 0.07, 0.7, 0, 20, true));                       // cúpula acesa
+    g.add(box(0.1, 0.05, 0.04, M.dark, -0.1, 0.555, 0.06));                           // despertador
+    place(g, 5.4, 3.9, Math.PI);
+  }
+  for (const s of [0, 1]) { const sl = box(0.1, 0.03, 0.26, grey, 5.42 + s * 0.12, 0.015, 3.2); sl.rotation.y = 0.15; add(sl); } // chinelos
+
+  // ---- guarda-roupa 2 portas na parede direita (antes da TV) ----------------
+  {
+    const g = G();
+    g.add(box(1.2, 1.94, 0.55, offw, 0, 1.03, 0));
+    g.add(box(1.16, 0.06, 0.5, M.dark, 0, 0.03, -0.02));                              // rodapé recuado preto
+    g.add(box(1.22, 0.03, 0.57, offw, 0, 2.015, 0));                                // tampo liso
+    g.add(box(0.008, 1.88, 0.012, M.dark, 0, 1.03, 0.278));                          // fresta entre portas (sem puxadores)
+    place(g, 6.395, 0.85, -Math.PI / 2);
+  }
+
+  // ---- rack baixo sob a TV (x=6,8 · z 1,6–2,6), ao lado do pé da cama -------
+  add(box(0.26, 0.4, 0.5, woodL, 6.57, 0.25, 1.86));
+  add(box(0.2, 0.05, 0.28, M.dark, 6.57, 0.475, 1.86));                              // console de jogos
+
+  // ---- persiana rolô meio abaixada na janela do fundo (sobre a mesa) --------
+  add(box(1.32, 0.07, 0.07, offw, 5.0, 2.2, 0.115));                              // cassete
+  add(box(1.24, 0.62, 0.008, blind, 5.0, 1.86, 0.12, { cast: false }));              // tecido
+  add(box(1.24, 0.02, 0.014, M.steel, 5.0, 1.545, 0.12));                            // barra inferior
+
+  // ---- cortina azul-petróleo na janela da frente (sobre a cabeceira) --------
+  const rod = cyl(0.01, 0.01, 1.34, M.dark, 5.95, 2.3, 4.05, 8); rod.rotation.z = Math.PI / 2; add(rod);
+  for (const s of [-1, 1]) {
+    add(sph(0.02, M.dark, 5.95 + s * 0.67, 2.3, 4.05));                           // ponteiras
+    add(box(0.32, 1.32, 0.05, curt, 5.95 + s * 0.5, 1.64, 4.06));                  // painéis abertos de linho
+  }
+
+  // ---- quadros: poster sobre a mesa e quadro sobre a cama -------------------
+  add(box(0.5, 0.7, 0.025, woodM, 4.0, 1.72, 0.0875));
+  add(box(0.45, 0.65, 0.006, terra, 4.0, 1.72, 0.103, { cast: false }));
+  add(box(0.025, 0.5, 0.7, woodM, 6.7125, 1.55, 3.15));
+  add(box(0.006, 0.45, 0.65, linen, 6.697, 1.55, 3.15, { cast: false }));
+  const disc = cyl(0.14, 0.14, 0.004, sage, 6.692, 1.55, 3.15, 24); disc.rotation.z = Math.PI / 2; add(disc);
+
+  // ---- tapete entre a mesa e a cama ----------------------------------------
+  add(box(1.3, 0.012, 1.0, rugMat, 4.95, 0.006, 2.55, { cast: false }));
+  for (const s of [-1, 1]) add(box(1.3, 0.004, 0.03, sage, 4.95, 0.014, 2.55 + s * 0.4, { cast: false }));
+
+  // ---- planta de chão no canto esquerdo, ao lado da porta -------------------
+  add(cyl(0.12, 0.09, 0.28, ceramic, 3.895, 0.14, 3.8, 14));
+  add(cyl(0.11, 0.11, 0.02, M.soil, 3.895, 0.285, 3.8, 12));
+  add(cyl(0.012, 0.018, 0.5, M.trunk, 3.895, 0.53, 3.8, 6));
+  for (let i = 0; i < 4; i++) {
+    const a = 0.8 + i * 1.57;
+    const leaf = sph(0.13, i % 2 ? M.plant : M.leaf2, 3.895 + Math.cos(a) * 0.05, 0.72 + i * 0.05, 3.8 + Math.sin(a) * 0.05);
+    leaf.scale.set(1.15, 0.45, 1); leaf.rotation.y = -a; add(leaf);
+  }
+
+  // ---- violão encostado na parede esquerda, entre a estante e a planta ------
+  {
+    const g = G();
+    const b1 = cyl(0.19, 0.19, 0.09, spruce, 0, 0.19, 0, 24); b1.rotation.z = Math.PI / 2; g.add(b1);   // bojo inferior
+    const b2 = cyl(0.15, 0.15, 0.09, spruce, 0, 0.45, 0, 24); b2.rotation.z = Math.PI / 2; g.add(b2);   // bojo superior
+    const hole = cyl(0.045, 0.045, 0.006, M.dark, 0.047, 0.37, 0, 16); hole.rotation.z = Math.PI / 2; g.add(hole); // boca
+    g.add(box(0.008, 0.03, 0.12, M.dark, 0.048, 0.2, 0));                             // cavalete
+    g.add(box(0.03, 0.5, 0.05, woodM, 0.015, 0.86, 0));                               // braço
+    g.add(box(0.006, 0.5, 0.045, M.dark, 0.033, 0.86, 0));                            // escala
+    g.add(box(0.02, 0.16, 0.07, woodM, 0.02, 1.19, 0));                               // mão
+    g.add(box(0.002, 0.95, 0.03, M.chrome, 0.052, 0.66, 0, { cast: false }));         // cordas
+    const gt = place(g, 3.85, 3.36); gt.rotation.z = 0.12;                            // inclinado contra a parede
+  }
+
+  // ---- mochila encostada na parede do fundo, entre a mesa e o guarda-roupa --
+  {
+    const g = G();
+    g.add(box(0.3, 0.42, 0.16, petrolD, 0, 0.21, 0));
+    g.add(box(0.22, 0.16, 0.05, petrol, 0, 0.13, 0.1));                               // bolso frontal
+    g.add(torus(0.04, 0.008, Math.PI, M.dark, 0, 0.42, -0.02));                        // alça de mão
+    const bp = place(g, 5.55, 0.28); bp.rotation.x = -0.12;
+  }
+}
+
+function roomSalaCozinha(ctx) {
+  // ---------------------------------------------------------------------------
+  // SALA / COZINHA (x 6,8–10,3) + BALCÃO (x 10,3–12,5) · z 0–4,2
+  // Estilo minimalista (referência de vídeo): creme/linho, carvalho, nogueira, pedra clara, preto fosco,
+  // verde-oliva/sálvia e terracota em detalhe. Layout e posições da casa real preservados.
+  // Objetos do cartão (ar-condicionado, pendentes) NÃO são recriados.
+  // ---------------------------------------------------------------------------
+  const THREE = ctx.THREE, M = ctx.M, F = ctx.F;
+  const box = (...a) => ctx.box(...a), cyl = (...a) => ctx.cyl(...a), sph = (...a) => ctx.sph(...a);
+  const place = (...a) => ctx.place(...a), std = (o) => ctx.std(o), rnd = () => ctx.rnd();
+  const put = (m) => { ctx.add(m); return m; };
+  const G = () => new THREE.Group();
+  const rot = (m, x = 0, y = 0, z = 0) => { m.rotation.set(x, y, z); return m; };
+  const mesh = (geo, mat, x, y, z) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.castShadow = true; m.receiveShadow = true; return m; };
+  // caixa com os 4 cantos verticais arredondados (raio r); origem no centro
+  const rb = (w, h, d, mat, x, y, z, r = 0.04, opts = {}) => {
+    r = Math.min(r, w * 0.49, d * 0.49);
+    const s = new THREE.Shape(), hw = w / 2, hd = d / 2;
+    s.moveTo(-hw + r, -hd); s.lineTo(hw - r, -hd); s.absarc(hw - r, -hd + r, r, -Math.PI / 2, 0, false);
+    s.lineTo(hw, hd - r); s.absarc(hw - r, hd - r, r, 0, Math.PI / 2, false);
+    s.lineTo(-hw + r, hd); s.absarc(-hw + r, hd - r, r, Math.PI / 2, Math.PI, false);
+    s.lineTo(-hw, -hd + r); s.absarc(-hw + r, -hd + r, r, Math.PI, Math.PI * 1.5, false);
+    const g = new THREE.ExtrudeGeometry(s, { depth: h, bevelEnabled: false, curveSegments: 5 });
+    g.rotateX(-Math.PI / 2); g.translate(0, -h / 2, 0);
+    const m = new THREE.Mesh(g, mat); m.position.set(x, y, z);
+    m.castShadow = opts.cast !== false; m.receiveShadow = true; return m;
+  };
+
+  // Materiais locais (nunca altera os materiais compartilhados M.*)
+  const walnut   = std({ color: 0x5b3d29, roughness: 0.55 });
+  const walnutDk = std({ color: 0x3f2a1c, roughness: 0.55 });
+  const oak      = std({ color: 0xcaa878, roughness: 0.6 });
+  const oakBack  = std({ color: 0xcaa878, roughness: 0.6 }); oakBack.side = THREE.DoubleSide;
+  const olive    = std({ color: 0x6b7040, roughness: 0.92 });
+  const sage     = std({ color: 0x9aa58a, roughness: 0.92 });
+  const terra    = std({ color: 0xb5623f, roughness: 0.9 });
+  const cream    = std({ color: 0xe6ddcb, roughness: 0.95 });
+  const creamLt  = std({ color: 0xf1ebdd, roughness: 0.95 });
+  const drape    = std({ color: 0xece5d6, roughness: 1 });
+  const sheer    = std({ color: 0xffffff, roughness: 1, transparent: true, opacity: 0.3 });
+  const glassy   = std({ color: 0xa9bcc4, roughness: 0.15, metalness: 0.1, transparent: true, opacity: 0.5 });
+  const marble   = std({ color: 0xece8de, roughness: 0.22, metalness: 0.02 });   // bancada de pedra clara
+  const stoneDk  = std({ color: 0x2a2d2c, roughness: 0.3 });
+  const ceramic  = std({ color: 0xf1ece2, roughness: 0.5 });
+  const wicker   = std({ color: 0xb9925a, roughness: 0.95 });
+  const black    = std({ color: 0x151515, roughness: 0.55 });                   // preto fosco
+  const inox     = std({ color: 0xc9cdd0, roughness: 0.32, metalness: 0.65 });
+  const paper    = std({ color: 0xfbfaf5, roughness: 0.9 });
+  const led      = std({ color: 0xffd9a0, emissive: 0xffa94d, emissiveIntensity: 1.5 });   // fita LED âmbar
+  const fruit    = [std({ color: 0xd98a3a, roughness: 0.7 }), std({ color: 0x9ab84a, roughness: 0.7 }), std({ color: 0xb8523a, roughness: 0.7 }), std({ color: 0xe6c84a, roughness: 0.8 })];
+  const woodMed = oak, mustard = terra, linen = cream;   // nomes antigos -> paleta nova
+
+  // ======================= BUILDERS (origem no centro da base) =======================
+  // Rack de nogueira 1,6 m flutuante: frentes lisas, vão recuado escuro com fita LED embaixo
+  const rack = () => {
+    const g = G();
+    g.add(box(1.5, 0.08, 0.36, black, 0, 0.14, 0));                                        // recuo escuro (parece flutuar)
+    g.add(rb(1.6, 0.4, 0.42, walnut, 0, 0.36, 0, 0.02));
+    g.add(box(1.62, 0.025, 0.44, oak, 0, 0.5725, 0));                                      // tampo carvalho fino
+    for (const sx of [-1, 1]) g.add(box(0.76, 0.34, 0.012, walnutDk, sx * 0.39, 0.36, 0.216));   // frentes lisas (push)
+    g.add(box(0.012, 0.34, 0.014, black, 0, 0.36, 0.217));                                 // fresta central
+    g.add(box(1.5, 0.012, 0.012, led, 0, 0.105, 0.17, { cast: false }));                   // LED sob o rack
+    return g;
+  };
+  // TV fina com moldura preta (tela para +z), pé central escondido
+  const tv = () => {
+    const g = G();
+    g.add(box(0.28, 0.012, 0.14, black, 0, 0.006, 0));
+    g.add(box(0.05, 0.1, 0.02, black, 0, 0.055, 0));
+    g.add(box(0.74, 0.44, 0.022, black, 0, 0.32, 0));
+    g.add(box(0.71, 0.41, 0.006, M.screenOff, 0, 0.32, 0.014, { cast: false }));
+    return g;
+  };
+  // Sofá baixo de linho creme, formas macias, sem pés aparentes (encosto em -z)
+  const sofa = () => {
+    const g = G();
+    g.add(box(1.28, 0.06, 0.66, black, 0, 0.03, 0));                                       // plinto recuado
+    g.add(rb(1.42, 0.26, 0.84, cream, 0, 0.19, 0, 0.1));                                   // base
+    g.add(rb(1.42, 0.34, 0.2, cream, 0, 0.5, -0.31, 0.08));                                // encosto baixo
+    for (const sx of [-1, 1]) {
+      g.add(rb(0.17, 0.2, 0.84, cream, sx * 0.62, 0.43, 0, 0.07));                         // braços arredondados
+      g.add(rb(0.52, 0.11, 0.58, creamLt, sx * 0.27, 0.375, 0.07, 0.07));                  // almofada do assento
+    }
+    g.add(rot(rb(0.4, 0.34, 0.1, sage, -0.36, 0.56, -0.12, 0.06), -0.15, 0.2));           // almofadas sálvia / terracota
+    g.add(rot(rb(0.34, 0.3, 0.1, terra, 0.4, 0.55, -0.12, 0.05), -0.12, -0.2));
+    return g;
+  };
+  // Poltrona arredondada verde-oliva (frente em +z)
+  const armchair = () => {
+    const g = G();
+    const oliveBack = olive.clone(); oliveBack.side = THREE.DoubleSide;
+    g.add(cyl(0.3, 0.3, 0.3, olive, 0, 0.16, 0, 24));
+    g.add(mesh(new THREE.CylinderGeometry(0.3, 0.3, 0.3, 24, 1, true, Math.PI * 0.3, Math.PI * 1.4), oliveBack, 0, 0.45, 0));
+    g.add(cyl(0.24, 0.24, 0.07, sage, 0, 0.33, 0.03, 24));                                // almofada do assento
+    g.add(cyl(0.2, 0.2, 0.05, black, 0, 0.015, 0, 18));
+    return g;
+  };
+  // Mesa de centro redonda de pedra com base de carvalho
+  const coffeeTable = () => {
+    const g = G();
+    g.add(cyl(0.3, 0.3, 0.03, marble, 0, 0.36, 0, 32));
+    g.add(cyl(0.16, 0.2, 0.34, oak, 0, 0.17, 0, 24));
+    g.add(cyl(0.025, 0.025, 0.12, ceramic, 0.1, 0.435, 0.05, 12));
+    g.add(sph(0.04, olive, 0.1, 0.52, 0.05));
+    return g;
+  };
+  // Cadeira de jantar: carvalho claro, assento com almofada fina, pernas pretas finas (encosto em -z)
+  const chair = () => {
+    const g = G();
+    g.add(rb(0.44, 0.035, 0.44, oak, 0, 0.445, 0, 0.06));
+    g.add(rb(0.38, 0.03, 0.38, sage, 0, 0.478, 0.01, 0.06));
+    for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) g.add(cyl(0.011, 0.011, 0.43, black, sx * 0.19, 0.215, sz * 0.19, 6));
+    g.add(mesh(new THREE.CylinderGeometry(0.33, 0.33, 0.34, 14, 1, true, Math.PI - 0.62, 1.24), oakBack, 0, 0.665, 0.12));
+    return g;
+  };
+  // Mesa oval 1,5 × 0,95: tampo de carvalho fino, pernas pretas finas
+  const table = () => {
+    const g = G();
+    const top = cyl(1, 1, 0.035, oak, 0, 0.76, 0, 48); top.scale.set(0.75, 1, 0.475); g.add(top);
+    for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) g.add(cyl(0.016, 0.013, 0.74, black, sx * 0.5, 0.37, sz * 0.25, 8));
+    g.add(box(1.0, 0.03, 0.02, black, 0, 0.72, 0)); g.add(box(0.02, 0.03, 0.46, black, -0.5, 0.72, 0)); g.add(box(0.02, 0.03, 0.46, black, 0.5, 0.72, 0));
+    return g;
+  };
+  // Centro de mesa: caminho de linho + fruteira de cerâmica (posicionar a y = tampo)
+  const tableTop = () => {
+    const g = G();
+    g.add(box(0.9, 0.004, 0.28, cream, 0, 0.002, 0, { cast: false }));
+    g.add(cyl(0.12, 0.08, 0.05, ceramic, 0, 0.025, 0, 24));
+    g.add(sph(0.04, fruit[1], -0.04, 0.065, 0.02)); g.add(sph(0.04, fruit[0], 0.045, 0.065, -0.03)); g.add(sph(0.036, fruit[2], 0.005, 0.098, 0));
+    g.add(cyl(0.022, 0.022, 0.2, ceramic, 0.36, 0.1, 0.02, 12)); g.add(rot(cyl(0.003, 0.003, 0.3, M.trunk, 0.36, 0.34, 0.02, 4), 0, 0, 0.1));
+    return g;
+  };
+  // Banqueta alta: assento arredondado oliva, pernas pretas finas
+  const stool = () => {
+    const g = G();
+    g.add(cyl(0.17, 0.17, 0.05, olive, 0, 0.705, 0, 28));
+    for (let i = 0; i < 3; i++) { const a = (i * Math.PI * 2) / 3 + Math.PI / 6; g.add(cyl(0.01, 0.01, 0.68, black, Math.cos(a) * 0.12, 0.34, Math.sin(a) * 0.12, 6)); }
+    g.add(cyl(0.12, 0.12, 0.012, black, 0, 0.3, 0, 18));
+    return g;
+  };
+  // Geladeira inox embutida (frente em +z): painéis lisos, puxadores finos e longos, sem ímãs
+  const fridge = () => {
+    const g = G();
+    g.add(box(0.72, 0.08, 0.66, black, 0, 0.04, 0));
+    g.add(rb(0.75, 1.77, 0.7, inox, 0, 0.965, 0, 0.012));
+    g.add(box(0.73, 0.01, 0.01, black, 0, 1.3, 0.352));
+    g.add(box(0.014, 0.55, 0.022, black, -0.3, 1.58, 0.364));
+    g.add(box(0.014, 0.9, 0.022, black, -0.3, 0.78, 0.364));
+    return g;
+  };
+  // Planta alta em vaso grande de cerâmica creme (≈1,5 m), folhas amplas
+  const plantTall = () => {
+    const g = G();
+    g.add(cyl(0.18, 0.15, 0.4, ceramic, 0, 0.2, 0, 24));
+    g.add(cyl(0.17, 0.17, 0.02, M.soil, 0, 0.4, 0, 16));
+    g.add(cyl(0.022, 0.03, 0.85, M.trunk, 0, 0.82, 0, 8));
+    for (let i = 0; i < 7; i++) { const a = i * 1.5 + 0.4, r = 0.1 + (i % 2) * 0.1; const l = sph(0.2 + (i % 3) * 0.03, i % 2 ? M.leaf2 : M.plant, Math.cos(a) * r, 0.95 + i * 0.12, Math.sin(a) * r); l.scale.set(1, 0.75, 1); g.add(l); }
+    return g;
+  };
+  // Fogão: cooktop de vidro preto + forno inox embutido (frente em +z)
+  const stove = () => {
+    const g = G();
+    g.add(box(0.5, 0.05, 0.5, black, 0, 0.025, 0));
+    g.add(rb(0.58, 0.81, 0.58, inox, 0, 0.455, 0, 0.01));
+    g.add(box(0.6, 0.016, 0.6, black, 0, 0.868, 0));
+    for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) g.add(cyl(0.07, 0.07, 0.004, stoneDk, sx * 0.14, 0.878, sz * 0.14, 20));
+    g.add(box(0.5, 0.36, 0.012, black, 0, 0.36, 0.294));
+    g.add(box(0.36, 0.14, 0.008, M.screenOff, 0, 0.4, 0.302, { cast: false }));
+    g.add(box(0.46, 0.014, 0.02, inox, 0, 0.57, 0.31));
+    g.add(box(0.5, 0.06, 0.012, black, 0, 0.73, 0.294));
+    for (let i = 0; i < 4; i++) g.add(rot(cyl(0.011, 0.011, 0.02, inox, -0.18 + i * 0.12, 0.73, 0.305, 10), Math.PI / 2));
+    return g;
+  };
+  // Quadro-textura minimalista na parede do fundo (z = 0)
+  const frame = (w, h, x, y, art) => {
+    put(box(w, h, 0.025, art, x, y, 0.09));
+    put(box(w - 0.1, h - 0.1, 0.006, creamLt, x, y, 0.1, { cast: false }));
+  };
+
+  // ======================= SALA (x 6,8–10,3) =======================
+  // Rack flutuante com TV fina e objetos; fita LED no nicho (AC do cartão fica mais alto, y 2,2–2,5)
+  place(rack(), 7.76, 0.31);
+  place(tv(), 7.76, 0.31, 0, 0.585);
+  put(cyl(0.05, 0.035, 0.24, ceramic, 7.13, 0.7, 0.31, 20));                                    // vaso de cerâmica
+  put(rot(cyl(0.004, 0.004, 0.4, M.trunk, 7.1, 0.98, 0.3, 5), 0.12, 0, 0.22));                  // ramos secos
+  put(rot(cyl(0.004, 0.004, 0.36, M.trunk, 7.16, 0.96, 0.33, 5), -0.1, 0, -0.18));
+  put(box(0.2, 0.03, 0.15, cream, 8.36, 0.6, 0.31));                                             // livros
+  put(rot(box(0.18, 0.03, 0.14, terra, 8.36, 0.63, 0.31), 0, 0.15, 0));
+  put(cyl(0.05, 0.05, 0.02, black, 8.36, 0.655, 0.31, 20));                                      // tigela preta
+  frame(0.7, 0.5, 7.76, 1.5, cream); frame(0.34, 0.46, 8.4, 1.6, sage); frame(0.3, 0.3, 7.12, 1.5, terra);
+  // Relógio de parede minimalista (parede esquerda, x = 6,8)
+  put(rot(cyl(0.15, 0.15, 0.02, black, 6.886, 1.95, 1.2, 28), 0, 0, Math.PI / 2));
+  put(rot(cyl(0.138, 0.138, 0.012, paper, 6.902, 1.95, 1.2, 28), 0, 0, Math.PI / 2));
+  put(box(0.01, 0.1, 0.006, black, 6.911, 2.0, 1.2, { cast: false }));
+  put(rot(box(0.01, 0.07, 0.006, black, 6.911, 1.969, 1.229, { cast: false }), 1.0, 0, 0));
+  // Geladeira no canto junto da meia-parede + coluna de nogueira acima + planta alta
+  place(fridge(), 9.8, 0.45);
+  put(box(0.78, 0.98, 0.7, walnut, 9.8, 2.3, 0.4));                                              // marcenaria sobre a geladeira (até o teto)
+  put(box(0.7, 0.01, 0.01, led, 9.8, 1.808, 0.752, { cast: false }));
+  place(plantTall(), 9.0, 0.42);
+  // Sofá baixo de linho virado para a TV
+  place(sofa(), 7.68, 1.75, Math.PI);
+  place(coffeeTable(), 7.68, 0.98);
+  place(armchair(), 8.72, 1.3, -2.1);
+  place(F.rug(1.9, 1.5, 0xd9cdb4), 7.68, 1.25);                                                  // tapete de lã creme
+  // Sala de jantar: tapete claro, mesa oval, 6 cadeiras, centro de mesa
+  place(F.rug(1.7, 1.5, 0xd5c8ad), 9.2, 2.98);
+  place(table(), 9.08, 3.0);
+  place(tableTop(), 9.08, 3.0, 0, 0.778);
+  for (const [cx, cz, ry] of [[8.1, 3.0, Math.PI / 2], [10.06, 3.0, -Math.PI / 2], [8.74, 2.28, 0], [9.42, 2.28, 0], [8.74, 3.72, Math.PI], [9.42, 3.72, Math.PI]]) {
+    place(chair(), cx, cz, ry + (rnd() - 0.5) * 0.12);
+  }
+  // Balcão americano: tampo de carvalho na meia-parede (lado da sala) com 2 banquetas
+  put(box(0.34, 0.035, 1.25, oak, 10.055, 1.0, 1.55));
+  for (const z of [1.05, 2.05]) put(rot(box(0.37, 0.02, 0.02, black, 10.055, 0.88, z), 0, 0, -0.552));   // mãos-francesas finas
+  place(stool(), 9.98, 1.24, rnd() * 0.5); place(stool(), 9.98, 1.86, rnd() * 0.5);
+  // Cortina no vidro da varanda (x 9,6–12,2): trilho preto, voil e painéis de linho nas laterais
+  put(rot(cyl(0.01, 0.01, 2.8, black, 10.9, 2.4, 4.0, 8), 0, 0, Math.PI / 2));
+  put(box(2.5, 2.3, 0.01, sheer, 10.9, 1.19, 4.075, { cast: false, receive: false }));
+  for (const x0 of [9.66, 11.78]) {
+    put(box(0.2, 2.34, 0.06, drape, x0 + 0.1, 1.21, 4.015, { cast: false }));
+    put(box(0.18, 2.34, 0.09, drape, x0 + 0.3, 1.21, 4.015, { cast: false }));
+  }
+
+  // ======================= BALCÃO / COZINHA (x 10,3–12,5) =======================
+  // Fogão no canto esquerdo do fundo (fora da janela x 11–12), coifa embutida em coluna de nogueira até o teto
+  place(stove(), 10.73, 0.39);
+  put(cyl(0.1, 0.09, 0.1, inox, 10.59, 0.94, 0.25, 20));                                         // panela com tampa
+  put(cyl(0.105, 0.105, 0.012, inox, 10.59, 0.996, 0.25, 20));
+  put(sph(0.014, black, 10.59, 1.01, 0.25));
+  put(cyl(0.11, 0.1, 0.035, black, 10.87, 0.91, 0.53, 20));                                      // frigideira
+  put(box(0.025, 0.014, 0.18, black, 10.87, 0.92, 0.73));
+  put(box(0.14, 0.2, 0.012, cream, 10.82, 0.45, 0.719, { cast: false }));                        // pano de prato
+  put(box(0.64, 1.2, 0.5, walnut, 10.73, 2.2, 0.31));                                            // coluna da coifa (embutida)
+  put(box(0.58, 0.02, 0.44, inox, 10.73, 1.59, 0.34));                                           // aba inox da coifa
+  put(box(0.5, 0.01, 0.01, led, 10.73, 1.575, 0.58, { cast: false }));
+  // Armários baixos de nogueira em L, tampo de pedra clara, rodapé preto recuado
+  put(box(1.395, 0.8, 0.56, walnut, 11.7275, 0.46, 0.365));                                      // fundo (sob a janela)
+  put(box(1.395, 0.06, 0.5, black, 11.7275, 0.03, 0.335, { cast: false }));
+  put(box(1.395, 0.03, 0.62, marble, 11.7275, 0.875, 0.385));
+  put(box(0.006, 0.7, 0.012, black, 11.725, 0.46, 0.65, { cast: false }));
+  for (const x of [11.38, 12.07]) put(box(0.14, 0.012, 0.014, black, x, 0.83, 0.657));          // puxadores embutidos finos
+  put(box(0.56, 0.8, 2.5, walnut, 12.145, 0.46, 1.95));                                          // parede direita (2,5 m)
+  put(box(0.5, 0.06, 2.5, black, 12.175, 0.03, 1.95, { cast: false }));
+  put(box(0.62, 0.03, 2.505, marble, 12.115, 0.875, 1.9475));
+  for (let i = 1; i < 4; i++) put(box(0.012, 0.7, 0.006, black, 11.86, 0.46, 0.7 + i * 0.625, { cast: false }));
+  for (let i = 0; i < 4; i++) put(box(0.014, 0.012, 0.14, black, 11.853, 0.83, 1.0125 + i * 0.625));
+  // Painel de pedra clara atrás das bancadas (sem azulejo estampado) + fita LED sob os armários altos
+  const bandX = (w, h, x, y, mat) => put(box(w, h, 0.012, mat, x, y, 0.081, { cast: false }));        // na parede do fundo (z = 0)
+  const bandZ = (l, h, z, y, mat) => put(box(0.012, h, l, mat, 12.419, y, z, { cast: false }));      // na parede direita (x = 12,5)
+  bandX(0.595, 0.58, 10.6725, 1.19, marble);                                                         // atrás do fogão
+  bandX(0.395, 0.58, 12.2275, 1.19, marble);                                                         // à direita da janela
+  bandZ(3.175, 0.58, 1.6625, 1.19, marble);
+  put(box(0.01, 0.012, 2.4, led, 12.1, 1.435, 1.7, { cast: false }));                                // LED sob os armários
+  // Armários superiores de nogueira até o teto (2,4 m), frentes lisas
+  put(box(0.35, 1.3, 2.4, walnut, 12.25, 2.1, 1.7));
+  for (const z of [1.1, 1.7, 2.3]) put(box(0.006, 1.25, 0.006, black, 12.072, 2.1, z, { cast: false }));
+  for (const z of [0.8, 1.4, 2.0, 2.6]) put(box(0.014, 0.1, 0.012, black, 12.068, 1.6, z));
+  // Pia inox embutida na pedra com misturador preto fosco
+  put(box(0.46, 0.012, 0.52, inox, 12.13, 0.892, 1.65));
+  put(box(0.4, 0.008, 0.46, stoneDk, 12.13, 0.9, 1.65, { cast: false }));
+  put(cyl(0.011, 0.011, 0.26, black, 12.38, 1.02, 1.65, 8));
+  put(box(0.17, 0.018, 0.018, black, 12.295, 1.15, 1.65));
+  put(cyl(0.02, 0.024, 0.15, ceramic, 12.37, 0.97, 1.42, 12));
+  put(box(0.06, 0.025, 0.04, sage, 12.36, 0.907, 1.88));
+  // Escorredor discreto: 3 pratos em pé + 2 canecas
+  put(box(0.36, 0.014, 0.4, inox, 12.14, 0.9, 2.25));
+  for (let i = 0; i < 3; i++) put(rot(cyl(0.1, 0.1, 0.008, ceramic, 12.14, 1.01, 2.13 + i * 0.07, 20), Math.PI / 2));
+  for (const x of [12.06, 12.2]) put(cyl(0.035, 0.03, 0.08, ceramic, x, 0.95, 2.4, 12));
+  // Micro-ondas embutido preto (porta virada para a cozinha)
+  put(box(0.35, 0.3, 0.5, black, 12.235, 1.05, 1.0));
+  put(box(0.008, 0.24, 0.32, M.screenOff, 12.056, 1.05, 0.92, { cast: false }));
+  put(box(0.008, 0.24, 0.1, inox, 12.056, 1.05, 1.15, { cast: false }));
+  // Cafeteira e liquidificador pretos na bancada do fundo
+  put(box(0.14, 0.3, 0.09, black, 11.25, 1.04, 0.445));
+  put(box(0.14, 0.11, 0.22, black, 11.25, 1.135, 0.5));
+  put(cyl(0.05, 0.045, 0.14, glassy, 11.25, 0.965, 0.55, 14));
+  put(box(0.13, 0.13, 0.13, black, 11.65, 0.955, 0.5));
+  put(cyl(0.06, 0.045, 0.2, glassy, 11.65, 1.12, 0.5, 12));
+  put(cyl(0.062, 0.062, 0.02, black, 11.65, 1.23, 0.5, 12));
+  // Cesto de vime com frutas no canto da bancada
+  put(cyl(0.14, 0.11, 0.09, wicker, 12.16, 0.935, 0.4, 16));
+  put(sph(0.04, fruit[1], 12.12, 0.99, 0.37)); put(sph(0.04, fruit[0], 12.2, 0.99, 0.43)); put(sph(0.038, fruit[3], 12.15, 1.025, 0.44));
+  // Temperos em vasinhos de cerâmica creme em frente à janela (x 11–12)
+  for (const [x, mat] of [[11.2, M.plant], [11.5, M.leaf2], [11.8, M.plant]]) { put(cyl(0.045, 0.035, 0.09, ceramic, x, 0.935, 0.23, 14)); put(sph(0.062, mat, x, 1.03, 0.23)); }
+  // Tábua de corte, rolo de papel-toalha, lixeira inox, tapete de cozinha
+  put(box(0.3, 0.015, 0.2, oak, 12.16, 0.8975, 2.85));
+  put(cyl(0.055, 0.055, 0.24, paper, 12.3, 1.01, 3.1, 14));
+  put(cyl(0.13, 0.12, 0.5, inox, 12.15, 0.25, 3.55, 20));
+  put(cyl(0.135, 0.135, 0.03, black, 12.15, 0.515, 3.55, 20));
+  place(F.rug(0.55, 1.6, 0xb7b896), 11.42, 1.9);
+  // Prateleira flutuante de carvalho na meia-parede (lado da cozinha), com LED
+  put(box(0.16, 0.025, 0.6, oak, 10.455, 1.5, 1.3));
+  put(box(0.01, 0.01, 0.56, led, 10.4, 1.484, 1.3, { cast: false }));
+  for (const z of [1.1, 1.3, 1.5]) put(cyl(0.035, 0.035, 0.1, glassy, 10.46, 1.56, z, 10));
+}
+
+function roomVarandaPiscina(ctx) {
+  // VARANDA coberta — x 0–12,5 · z 4,2–6,2 (faces internas: x 0,075/12,425 · z 4,275/6,125).
+  //   Parede da casa (z=4,2): porta casal x 1,0–1,9 · janela x 2,5–3,3 · porta quarto x 4,1–5,0 · janela x 5,5–6,4 ·
+  //   porta sala x 7,4–8,3 · vidro do balcão x 9,6–12,2. Parede externa (z=6,2): porta p/ deck x 2,9–3,8 ·
+  //   janela x 4,6–6,6 · vidro x 8,0–12,0. Pendentes em (2,1/6,3/10,4 · 2,5 · 5,2) — objetos do cartão.
+  // DECK — x 2,9–10,9 · z 7,2–12,4; borda de pedra da piscina x 3,6–10,2 · z 7,9–11,7 (meia-lua centro 8,3/9,8 r 1,9).
+  // Faixas de grama: z 6,2–7,2 (entre varanda e deck) e x 2,4–2,9 (à esquerda do deck).
+  // Layout: toda a mobília da varanda encostada na parede da casa, corredor livre ≥ 1 m ao longo de z ≈ 5,2
+  //   (de x 0 até 10,7); rede no canto esquerdo (junto à parede externa cega x 0–2,9); sofá centrado na janela
+  //   x 4,6–6,6; churrasqueira + cervejeira entre a porta da sala e o vidro do balcão; mesa de madeira com bancos
+  //   no fundo direito (x > 10,7, sem passagem necessária). Deck: escadas nas posições originais, espreguiçadeiras na
+  //   faixa sul, mesa redonda + 4 cadeiras no canto NE, guarda-sol + cadeiras de piscina no canto SE, ducha e
+  //   tochas na faixa oeste, boias na água.
+  const { THREE, M, box, cyl, sph, place, add, std, rnd } = ctx;
+  const G = () => new THREE.Group();
+  const put = (m, x, y, z, rx = 0, ry = 0, rz = 0) => { m.position.set(x, y, z); m.rotation.set(rx, ry, rz); return m; };
+  // cilindro entre dois pontos (a → b), raio ra em a e rb em b
+  const rod = (mat, ra, rb, ax, ay, az, bx, by, bz, seg = 8) => {
+    const dir = new THREE.Vector3(bx - ax, by - ay, bz - az), len = dir.length();
+    const m = cyl(rb, ra, len, mat, (ax + bx) / 2, (ay + by) / 2, (az + bz) / 2, seg);
+    m.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir.normalize());
+    return m;
+  };
+  // cone/folha inclinado: base em (x,y,z), inclinação `tilt` da vertical, apontando para o azimute `a`
+  const leaf = (mat, r, len, x, y, z, tilt, a, flat = 0.3, seg = 5) => {
+    const m = cyl(0, r, len, mat, 0, 0, 0, seg);
+    m.scale.z = flat; m.rotation.order = 'YXZ'; m.rotation.set(tilt, a, 0);
+    m.position.set(x + Math.sin(a) * Math.sin(tilt) * len / 2, y + Math.cos(tilt) * len / 2, z + Math.cos(a) * Math.sin(tilt) * len / 2);
+    return m;
+  };
+
+  // ---------------- paleta (estilo do video): linho, carvalho, salvia, pedra clara, preto fosco, terracota em detalhe ----------------
+  const navy    = std({ color: 0x86967a, roughness: 0.9 });          // verde-salvia (almofadas, boias, toalhas)
+  const fibra   = std({ color: 0xd9cfba, roughness: 0.95 });         // linho creme (estofados)
+  const linen   = std({ color: 0xf4efe4, roughness: 0.95 });         // tecido/almofadas
+  const teak    = std({ color: 0xc8a26c, roughness: 0.7 });          // carvalho claro
+  const bamboo  = std({ color: 0xb99a66, roughness: 0.8 });
+  const plaster = std({ color: 0xf1ece2, roughness: 0.95 });         // alvenaria rebocada
+  const brick   = std({ color: 0xa8613f, roughness: 0.95 });         // terracota
+  const granite = std({ color: 0x242527, roughness: 0.4, metalness: 0.1 });   // pedra escura / preto fosco
+  const ceramic = std({ color: 0xe9e2d3, roughness: 0.55 });         // vasos creme
+  const stone   = std({ color: 0xded7c6, roughness: 0.95 });         // pedra clara
+  const coir    = std({ color: 0xbfae8a, roughness: 1 });            // capacho
+  const agave   = std({ color: 0x7fa377, roughness: 0.9 });
+  const green   = std({ color: 0x3a7a46, roughness: 0.3 });          // garrafas
+  const amber   = std({ color: 0x8a4b12, roughness: 0.3 });
+  const lime    = std({ color: 0xc9e36b, roughness: 0.2, transparent: true, opacity: 0.75 });
+  const ember   = std({ color: 0xff6a1a, emissive: 0xff4500, emissiveIntensity: 1.3 });
+  const flame   = std({ color: 0xffb347, emissive: 0xff8a1a, emissiveIntensity: 1.8 });
+  const lampOn  = std({ color: 0xfff3d6, emissive: 0xffd08a, emissiveIntensity: 1.0 });
+  const ledCool = std({ color: 0xfff0d0, emissive: 0xffc88a, emissiveIntensity: 1.2 });
+  const blk     = std({ color: 0x17181a, roughness: 0.6, metalness: 0.2 });   // preto fosco (pes e mastros finos)
+  const aqua    = std({ color: 0xbff7f2, emissive: 0x3fe3d8, emissiveIntensity: 2.2 });   // luz subaquatica
+  const canopy  = new THREE.MeshStandardMaterial({ color: 0xe8dcc3, roughness: 0.9, side: THREE.DoubleSide });
+  const canopyW = new THREE.MeshStandardMaterial({ color: 0xf7f3ea, roughness: 0.9, side: THREE.DoubleSide });
+
+  // =====================================================================================
+  // VARANDA
+  // =====================================================================================
+
+  // ---- canto esquerdo (x 0–1): palmeira em vaso branco grande ----
+  {
+    const g = G();
+    g.add(cyl(0.27, 0.2, 0.55, ceramic, 0, 0.275, 0, 16));
+    g.add(cyl(0.24, 0.24, 0.02, M.soil, 0, 0.56, 0, 12));
+    g.add(cyl(0.035, 0.05, 0.5, M.trunk, 0, 0.8, 0, 8));
+    for (let i = 0; i < 5; i++) {
+      // frondes apontando para longe da porta do casal (evita o vão x 1,0–1,9)
+      const a = -1.2 + (i / 4) * 2.4 + (rnd() - 0.5) * 0.3, tilt = 0.55 + rnd() * 0.3, len = 0.85 + rnd() * 0.2;
+      g.add(leaf(i % 2 ? M.plant : M.leaf2, 0.13, len, 0, 1.05, 0, tilt, a));
+    }
+    place(g, 0.5, 4.66);
+  }
+
+  // ---- rede (hammock) armada entre gancho na parede x=0 e coluna de madeira, ao longo da parede externa ----
+  {
+    const zc = 5.72, x0 = 0.62, x1 = 2.2, yEnd = 1.42, sag = 0.62;
+    // corpo: malha listrada marinho/branco (cores por vértice), catenária com bordas erguidas
+    const NU = 18, stripes = 7, pos = [], col = [], uv = [], idx = [];
+    const cNavy = new THREE.Color(0x8c9b7d), cWhite = new THREE.Color(0xefe8d8);
+    let vi = 0;
+    for (let j = 0; j < stripes; j++) {
+      const c = j % 2 ? cWhite : cNavy;
+      for (const v of [-1 + (2 * j) / stripes, -1 + (2 * (j + 1)) / stripes]) {
+        for (let i = 0; i <= NU; i++) {
+          const u = i / NU, s = Math.sin(Math.PI * u), hw = 0.06 + 0.26 * s;
+          pos.push(x0 + u * (x1 - x0), yEnd - sag * s + 0.16 * v * v * s, zc + v * hw);
+          col.push(c.r, c.g, c.b); uv.push(u, (v + 1) / 2);
+        }
+      }
+      const a = vi, b = vi + NU + 1;
+      for (let i = 0; i < NU; i++) idx.push(a + i, b + i, a + i + 1, b + i, b + i + 1, a + i + 1);
+      vi += 2 * (NU + 1);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    geo.setIndex(idx); geo.computeVertexNormals();
+    const body = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ vertexColors: true, roughness: 0.95, side: THREE.DoubleSide }));
+    body.castShadow = true; body.receiveShadow = true; body.userData.keep = true; add(body);
+    // punhos (leque de cordas) até os ganchos
+    add(rod(linen, 0.05, 0.012, x0, yEnd, zc, 0.1, 1.9, zc));
+    add(rod(linen, 0.05, 0.012, x1, yEnd, zc, 2.64, 1.9, zc));
+    add(box(0.02, 0.1, 0.1, M.chrome, 0.085, 1.9, zc));                    // chapa do gancho na parede x=0
+    add(box(0.1, 2.8, 0.1, blk, 2.72, 1.4, zc));                   // coluna de madeira da cobertura
+    add(sph(0.022, M.chrome, 2.64, 1.9, zc));                              // gancho na coluna
+    add(box(0.42, 0.1, 0.26, navy, (x0 + x1) / 2, yEnd - sag + 0.06, zc)); // almofada
+  }
+
+  // ---- capacho na porta para o deck (x 2,9–3,8) + vaso entre a janela e a porta do quarto ----
+  add(box(0.72, 0.015, 0.45, coir, 3.35, 0.02, 5.88, { cast: false }));
+  place(ctx.F.plant(0.9, 5), 3.66, 4.6);
+
+  // ---- sofá de fibra marinho com almofadas de linho, centrado na janela da varanda (x 4,6–6,6) ----
+  {
+    const g = G(), w = 1.9, d = 0.75;
+    g.add(box(w - 0.3, 0.06, d - 0.3, blk, 0, 0.03, 0));                // base recuada (sombra)
+    g.add(box(w, 0.3, d, fibra, 0, 0.23, 0));
+    g.add(box(0.14, 0.55, d, fibra, -w / 2 + 0.07, 0.355, 0)); g.add(box(0.14, 0.55, d, fibra, w / 2 - 0.07, 0.355, 0));
+    g.add(box(w - 0.28, 0.45, 0.14, fibra, 0, 0.605, -d / 2 + 0.07));
+    const cw = (w - 0.28) / 3;
+    for (let i = 0; i < 3; i++) {
+      const cx = -w / 2 + 0.14 + cw * (i + 0.5);
+      g.add(box(cw - 0.04, 0.12, d - 0.3, linen, cx, 0.44, 0.06));
+      g.add(put(box(cw - 0.06, 0.34, 0.1, linen, 0, 0, 0), cx, 0.65, -d / 2 + 0.2, -0.14));
+    }
+    g.add(put(box(0.38, 0.38, 0.1, navy, 0, 0, 0), -w / 2 + 0.4, 0.68, -d / 2 + 0.28, -0.2, 0, 0.35));
+    g.add(put(box(0.38, 0.38, 0.1, brick, 0, 0, 0), w / 2 - 0.4, 0.68, -d / 2 + 0.28, -0.2, 0, -0.3));
+    place(g, 6.3, 4.73);   // z 4,355–5,105 → corredor 5,105–6,125 (1,02 m)
+  }
+
+  // ---- churrasqueira de alvenaria com coifa e chaminé (x 8,42–9,58, entre a porta da sala e o vidro do balcão) ----
+  {
+    const g = G(), w = 1.16, d = 0.62;
+    g.add(box(w, 0.86, d - 0.02, plaster, 0, 0.43, -0.01));                      // corpo rebocado
+    g.add(box(0.5, 0.42, 0.03, M.dark, -0.27, 0.3, d / 2 - 0.015));                // nicho da lenha
+    for (const [lx, ly] of [[-0.36, 0.15], [-0.18, 0.15]]) g.add(put(cyl(0.06, 0.06, 0.5, M.trunk, 0, 0, 0, 8), lx, ly, d / 2 - 0.2, Math.PI / 2));
+    g.add(box(0.46, 0.6, 0.03, M.woodDark, 0.3, 0.4, d / 2 - 0.005));              // porta do armário
+    g.add(cyl(0.01, 0.01, 0.12, M.chrome, 0.48, 0.42, d / 2 + 0.015, 6));          // puxador
+    g.add(box(w + 0.02, 0.05, d + 0.04, granite, 0, 0.885, 0));                     // bancada de granito
+    g.add(box(w - 0.3, 0.05, d - 0.16, ember, 0, 0.935, 0.02));                     // brasas
+    g.add(box(0.14, 0.87, d, brick, -w / 2 + 0.07, 1.345, 0));                      // laterais de tijolo (y 0,91–1,78)
+    g.add(box(0.14, 0.87, d, brick, w / 2 - 0.07, 1.345, 0));
+    g.add(box(w - 0.28, 0.5, 0.1, brick, 0, 1.16, -d / 2 + 0.06));                  // fundo do fogo
+    g.add(box(w - 0.28, 0.012, d - 0.18, M.steel, 0, 1.08, 0.02));                  // grelha
+    g.add(box(w - 0.28, 0.37, 0.36, plaster, 0, 1.595, -d / 2 + 0.18));             // coifa (bloco junto à parede)
+    g.add(put(box(w - 0.28, 0.45, 0.03, plaster, 0, 0, 0), 0, 1.595, 0.18, -0.613)); // frente inclinada da coifa
+    g.add(box(0.4, 1.12, 0.34, plaster, 0, 2.34, -d / 2 + 0.18));                   // chaminé (y 1,78–2,90)
+    g.add(box(0.52, 0.05, 0.46, granite, 0, 2.925, -d / 2 + 0.18));                 // tampa
+    for (const sx of [-0.2, 0.15]) g.add(put(cyl(0.006, 0.006, 0.8, M.chrome, 0, 0, 0, 6), sx, 1.1, 0.02, Math.PI / 2)); // espetos
+    g.add(box(0.1, 0.06, 0.2, M.red, -0.2, 1.12, -0.02));                            // carne no espeto
+    place(g, 9.0, 4.595);   // fundo a 0,01 m da parede
+  }
+
+  // ---- cervejeira (geladeira de bebidas com porta de vidro) + caixinha de som ----
+  {
+    const g = G();
+    g.add(box(0.56, 0.86, 0.5, M.dark, 0, 0.43, -0.03));
+    g.add(box(0.56, 0.08, 0.1, M.dark, 0, 0.04, 0.24));                              // rodapé/piso interno
+    g.add(box(0.5, 0.02, 0.07, ledCool, 0, 0.82, 0.255, { cast: false }));           // LED interno
+    g.add(box(0.48, 0.015, 0.07, M.white, 0, 0.45, 0.255));                          // prateleira
+    for (let i = 0; i < 2; i++) g.add(cyl(0.028, 0.028, 0.23, i ? amber : green, -0.1 + i * 0.2, 0.575, 0.255, 8));
+    for (let i = 0; i < 2; i++) g.add(cyl(0.028, 0.028, 0.23, i ? green : amber, -0.08 + i * 0.16, 0.205, 0.255, 8));
+    g.add(box(0.54, 0.78, 0.02, M.glass, 0, 0.47, 0.3, { cast: false, receive: false })); // porta de vidro
+    g.add(cyl(0.01, 0.01, 0.5, M.chrome, 0.23, 0.5, 0.33, 6));                        // puxador
+    g.add(box(0.16, 0.06, 0.07, navy, -0.1, 0.89, -0.05));                            // caixinha de som
+    place(g, 9.98, 4.64);
+  }
+
+  // ---- mesa de madeira maciça com dois bancos (meio encaixados), no fundo direito: x 10,72–12,32 ----
+  {
+    const tx = 11.52, tz = 5.21;
+    add(box(1.6, 0.045, 0.66, teak, tx, 0.757, tz));
+    for (const dx of [-0.62, 0.62]) add(box(0.04, 0.73, 0.5, blk, tx + dx, 0.365, tz));
+    add(box(1.2, 0.03, 0.03, blk, tx, 0.24, tz));
+    for (const bz of [4.56, 5.86]) {
+      add(box(1.4, 0.05, 0.3, teak, tx, 0.455, bz));
+      for (const dx of [-0.55, 0.55]) add(box(0.03, 0.43, 0.24, blk, tx + dx, 0.215, bz));
+    }
+    add(cyl(0.16, 0.1, 0.09, M.white, tx, 0.825, tz, 16));                            // fruteira
+    add(sph(0.05, M.red, tx - 0.05, 0.9, tz - 0.03)); add(sph(0.05, M.leaf2, tx + 0.06, 0.9, tz + 0.03));
+    add(cyl(0.012, 0.035, 0.32, green, tx - 0.37, 0.94, tz - 0.16, 10));              // garrafa
+    add(cyl(0.032, 0.026, 0.11, M.glass, tx + 0.33, 0.835, tz - 0.16, 10));
+    add(cyl(0.032, 0.026, 0.11, M.glass, tx + 0.38, 0.835, tz + 0.17, 10));
+  }
+
+  // =====================================================================================
+  // FAIXA DE GRAMA entre a varanda e o deck (z 6,2–7,2) e à esquerda do deck (x 2,4–2,9)
+  // =====================================================================================
+  for (const z of [6.5, 6.92]) add(box(0.55, 0.03, 0.4, stone, 3.35, 0.015, z));     // pisantes da porta ao deck
+  for (const x of [5.9, 9.3]) {                                                        // balizadores de jardim
+    add(cyl(0.04, 0.04, 0.5, M.dark, x, 0.25, 6.7, 10));
+    add(cyl(0.055, 0.055, 0.1, lampOn, x, 0.55, 6.7, 10));
+  }
+  for (const [x, z] of [[4.6, 6.72], [7.5, 6.72], [2.68, 8.6]]) {      // arbustos baixos
+    const s = sph(0.26 + rnd() * 0.06, rnd() < 0.5 ? M.plant : M.leaf2, x, 0.2, z); s.scale.y = 0.75; add(s);
+  }
+
+  // =====================================================================================
+  // DECK DA PISCINA
+  // =====================================================================================
+  const POOL = ctx.POOL || { x0: 3.9, x1: 8.3, zc: 9.8, r: 1.6 };
+
+  // ---- escadas de inox (corrimão curvo + 3 degraus) nas posições originais ----
+  const ladder = () => {
+    const g = G();
+    for (const x of [-0.2, 0.2]) {
+      g.add(cyl(0.02, 0.02, 1.5, M.chrome, x, 0.25, 0, 8));
+      const bend = new THREE.Mesh(new THREE.TorusGeometry(0.25, 0.02, 8, 12, Math.PI / 2), M.chrome);
+      bend.position.set(x, 1.0, -0.25); bend.rotation.set(0, Math.PI / 2, Math.PI / 2); bend.castShadow = true; g.add(bend);
+    }
+    for (const y of [-0.35, -0.05, 0.25]) g.add(box(0.4, 0.025, 0.06, M.chrome, 0, y, 0));
+    return g;
+  };
+
+  // ---- espreguiçadeiras brancas com toalhas listradas, faixa sul do deck (z 11,7–12,4), viradas uma p/ outra ----
+  const lounger = (fabric, towelA, towelB) => {
+    const g = G();
+    g.add(box(0.62, 0.04, 1.9, M.white, 0, 0.33, 0));
+    for (const z of [-0.78, 0.78]) g.add(box(0.62, 0.3, 0.04, M.white, 0, 0.16, z));
+    g.add(box(0.56, 0.07, 1.15, fabric, 0, 0.385, 0.33));
+    g.add(put(box(0.56, 0.07, 0.72, fabric, 0, 0, 0), 0, 0.6, -0.6, 0.72));         // encosto reclinado (topo em -z)
+    g.add(box(0.5, 0.02, 1.05, towelA, 0, 0.43, 0.3));                               // toalha estendida
+    g.add(box(0.5, 0.024, 0.16, towelB, 0, 0.43, 0.55));                             // listra
+    return g;
+  };
+  place(lounger(navy, M.white, navy), 4.75, 12.05, Math.PI / 2);
+  place(lounger(navy, navy, M.white), 7.3, 12.05, -Math.PI / 2);
+  // mesinha entre as espreguiçadeiras: toalha enrolada + protetor solar
+  add(cyl(0.22, 0.22, 0.03, teak, 6.03, 0.45, 12.05, 20)); add(cyl(0.03, 0.03, 0.42, M.white, 6.03, 0.225, 12.05, 8)); add(cyl(0.16, 0.18, 0.02, M.white, 6.03, 0.01, 12.05, 16));
+  add(put(cyl(0.06, 0.06, 0.28, navy, 0, 0, 0, 12), 6.03, 0.525, 12.0, 0, 0, Math.PI / 2));
+  add(cyl(0.025, 0.025, 0.14, M.white, 6.14, 0.535, 12.15, 8));
+
+  // ---- canto SE: guarda-sol marinho/branco com mesinha no mastro, 2 caipirinhas, 2 cadeiras de piscina, cooler ----
+  {
+    const x = 10.05, z = 12.05;
+    add(cyl(0.3, 0.32, 0.05, stone, x, 0.025, z, 20));                               // base de pedra
+    add(cyl(0.03, 0.03, 2.4, teak, x, 1.2, z, 10));                                   // mastro de madeira
+    const c = new THREE.Mesh(new THREE.ConeGeometry(1.0, 0.34, 12, 1, true), canopy); c.position.set(x, 2.28, z); c.castShadow = true; add(c);
+    const c2 = new THREE.Mesh(new THREE.ConeGeometry(0.4, 0.14, 12, 1, true), canopyW); c2.position.set(x, 2.5, z); c2.castShadow = true; add(c2);
+    add(sph(0.03, teak, x, 2.6, z));
+    add(cyl(0.32, 0.32, 0.03, teak, x, 0.55, z, 20));                                 // mesinha no mastro
+    add(cyl(0.032, 0.032, 0.12, lime, x - 0.15, 0.625, z + 0.08, 10));
+    add(cyl(0.032, 0.032, 0.12, lime, x + 0.17, 0.625, z - 0.06, 10));
+    const poolChair = () => {                                                           // cadeira de piscina (tela marinho, tubo branco)
+      const g = G();
+      g.add(put(box(0.5, 0.03, 0.5, navy, 0, 0, 0), 0, 0.3, 0, -0.2));
+      g.add(put(box(0.5, 0.03, 0.62, navy, 0, 0, 0), 0, 0.55, -0.3, 1.2));
+      for (const sx of [-0.24, 0.24]) {
+        g.add(rod(blk, 0.012, 0.012, sx, 0, 0.24, sx, 0.32, 0.22));
+        g.add(rod(blk, 0.012, 0.012, sx, 0, -0.3, sx, 0.86, -0.42));
+      }
+      return g;
+    };
+    place(poolChair(), 9.4, 12.0, Math.PI);   // viradas para a piscina (-z)
+    place(poolChair(), 10.65, 12.0, Math.PI);
+    add(box(0.5, 0.4, 0.36, navy, 8.65, 0.2, 12.15)); add(box(0.52, 0.06, 0.38, M.white, 8.65, 0.43, 12.15)); // cooler
+  }
+
+  // ---- canto NE: mesa redonda de teca com 4 cadeiras de fibra (cubo) + lanterna ----
+  {
+    const tx = 9.95, tz = 7.75;
+    add(cyl(0.5, 0.5, 0.035, teak, tx, 0.74, tz, 32)); add(cyl(0.03, 0.03, 0.7, blk, tx, 0.36, tz, 10)); add(cyl(0.26, 0.28, 0.025, blk, tx, 0.013, tz, 24));
+    add(box(0.12, 0.18, 0.12, M.glass, tx, 0.85, tz, { cast: false })); add(box(0.13, 0.02, 0.13, M.dark, tx, 0.95, tz)); add(sph(0.035, lampOn, tx, 0.8, tz)); // lanterna com vela
+    const fibraChair = () => {
+      const g = G();
+      g.add(box(0.5, 0.38, 0.5, fibra, 0, 0.19, 0));
+      g.add(box(0.46, 0.08, 0.46, linen, 0, 0.42, 0.02));
+      g.add(box(0.5, 0.42, 0.08, fibra, 0, 0.59, -0.21));
+      return g;
+    };
+    for (const [cx, cz, ry] of [[tx, tz - 0.75, 0], [tx, tz + 0.75, Math.PI], [tx - 0.75, tz, Math.PI / 2], [tx + 0.75, tz, -Math.PI / 2]]) place(fibraChair(), cx, cz, ry);
+  }
+
+  // ---- faixa oeste: ducha de piscina (chuveirão) sobre estrado de madeira, vaso grande, tocha ----
+  {
+    const x = 3.14, z = 9.55;
+    add(box(0.6, 0.05, 0.6, teak, 3.28, 0.025, z));                                   // estrado
+    add(cyl(0.025, 0.025, 2.2, M.chrome, x, 1.1, z, 10));                             // coluna
+    add(box(0.3, 0.02, 0.02, M.chrome, x + 0.15, 2.15, z));                           // braço
+    add(cyl(0.1, 0.1, 0.02, M.chrome, x + 0.28, 2.13, z, 16));                        // crivo
+    add(put(cyl(0.03, 0.03, 0.04, M.chrome, 0, 0, 0, 10), x + 0.05, 1.0, z, 0, 0, Math.PI / 2)); // registro
+  }
+  const agavePot = (x, z) => {
+    add(cyl(0.25, 0.19, 0.5, ceramic, x, 0.25, z, 16)); add(cyl(0.22, 0.22, 0.02, M.soil, x, 0.5, z, 12));
+    for (let i = 0; i < 4; i++) add(leaf(agave, 0.07, 1.0 + rnd() * 0.2, x, 0.5, z, 0.3 + rnd() * 0.15, (i / 4) * Math.PI * 2 + rnd() * 0.5, 0.35, 4));
+  };
+  const spherePot = (x, z) => {
+    add(cyl(0.25, 0.19, 0.5, ceramic, x, 0.25, z, 16)); add(cyl(0.22, 0.22, 0.02, M.soil, x, 0.5, z, 12));
+    add(sph(0.32, M.plant, x, 0.8, z)); add(sph(0.24, M.leaf2, x + 0.12, 0.98, z - 0.1));
+  };
+  spherePot(3.28, 8.45);
+  agavePot(10.6, 10.9);
+  const torch = (x, z) => {
+    add(cyl(0.028, 0.032, 1.5, bamboo, x, 0.75, z, 8));
+    add(cyl(0.07, 0.045, 0.16, M.dark, x, 1.58, z, 10));
+    add(cyl(0, 0.05, 0.18, flame, x, 1.75, z, 8));
+  };
+  torch(3.25, 10.35); torch(3.35, 12.1); torch(7.0, 7.42);
+
+  // ---- luzes subaquaticas embutidas nas paredes da piscina (reta + meia-lua), brilho turquesa ----
+  {
+    const dsk = (x, y, z, rx, rz) => { const d = cyl(0.07, 0.07, 0.02, aqua, x, y, z, 16); d.rotation.set(rx, 0, rz); d.castShadow = false; add(d); };
+    const x0 = POOL.x0, x1 = POOL.x1, zc = POOL.zc, r = POOL.r;
+    for (const x of [x0 + 0.7, (x0 + x1) / 2, x1 - 0.6]) { dsk(x, -0.75, zc - r + 0.02, Math.PI / 2, 0); dsk(x, -0.75, zc + r - 0.02, Math.PI / 2, 0); }
+    for (const dz of [-0.55, 0.55]) dsk(x0 + 0.02, -0.75, zc + dz, 0, Math.PI / 2);
+    for (const a of [-0.8, 0, 0.8]) { const m = cyl(0.07, 0.07, 0.02, aqua, x1 + Math.cos(a) * (r - 0.02), -0.75, zc + Math.sin(a) * (r - 0.02), 16); m.rotation.set(0, -a, Math.PI / 2); m.castShadow = false; add(m); }
+  }
+
+  // ---- tom turquesa translucido sobre a agua (mesmo contorno da piscina) + brilho das luzes subaquaticas ----
+  {
+    const r = POOL.r, sh = new THREE.Shape();
+    sh.moveTo(POOL.x0, -(POOL.zc - r)); sh.lineTo(POOL.x1, -(POOL.zc - r));
+    sh.absarc(POOL.x1, -POOL.zc, r, Math.PI / 2, -Math.PI / 2, true); sh.lineTo(POOL.x0, -(POOL.zc + r)); sh.closePath();
+    const tint = new THREE.Mesh(new THREE.ShapeGeometry(sh, 32), new THREE.MeshBasicMaterial({ color: 0x35e0cf, transparent: true, opacity: 0.3, depthWrite: false }));
+    tint.rotation.x = -Math.PI / 2; tint.position.y = -0.14; tint.renderOrder = 2; tint.userData.keep = true; add(tint);
+    const cv = document.createElement('canvas'); cv.width = cv.height = 64;
+    const cx = cv.getContext('2d'), gr = cx.createRadialGradient(32, 32, 0, 32, 32, 32);
+    gr.addColorStop(0, 'rgba(200,255,250,0.95)'); gr.addColorStop(0.35, 'rgba(70,235,220,0.45)'); gr.addColorStop(1, 'rgba(40,220,210,0)');
+    cx.fillStyle = gr; cx.fillRect(0, 0, 64, 64);
+    const glowMat = new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(cv), transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
+    const glow = (x, z, s) => { const m = new THREE.Mesh(new THREE.PlaneGeometry(s, s), glowMat); m.rotation.x = -Math.PI / 2; m.position.set(x, -0.13, z); m.renderOrder = 3; add(m); };
+    const x0 = POOL.x0, x1 = POOL.x1, zc = POOL.zc;
+    for (const x of [x0 + 0.7, (x0 + x1) / 2, x1 - 0.6]) { glow(x, zc - r + 0.3, 1.1); glow(x, zc + r - 0.3, 1.1); }
+    for (const dz of [-0.55, 0.55]) glow(x0 + 0.3, zc + dz, 1.0);
+    for (const a of [-0.8, 0, 0.8]) glow(x1 + Math.cos(a) * (r - 0.3), zc + Math.sin(a) * (r - 0.3), 1.1);
+  }
+
+  // ---- boias na água (superfície em y = -0,16) ----
+  {
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.4, 0.13, 10, 24), navy);
+    ring.position.set(5.2, -0.14, 9.1); ring.rotation.x = Math.PI / 2; ring.castShadow = true; add(ring);
+    add(put(box(1.75, 0.12, 0.72, M.white, 0, 0, 0), 7.0, -0.12, 10.5, 0, 0.4));       // colchão inflável
+    add(put(box(0.7, 0.08, 0.26, navy, 0, 0, 0), 6.34, -0.09, 10.78, 0, 0.4));         // travesseiro do colchão
+    add(sph(0.15, M.white, 4.4, -0.06, 10.8));                                          // bola
+  }
+}
+
+function roomBanheiroDispensa(ctx) {
+  const { THREE, box, cyl, sph, place, add, std, rnd, M, F } = ctx;
+  const PI = Math.PI;
+  const G = () => new THREE.Group();
+  // cilindro deitado: axis 'x' ou 'z' (padrão 'y' = em pé)
+  const rod = (r, len, mat, x, y, z, axis = 'y', seg = 8) => {
+    const m = cyl(r, r, len, mat, x, y, z, seg);
+    if (axis === 'x') m.rotation.z = PI / 2; else if (axis === 'z') m.rotation.x = PI / 2;
+    return m;
+  };
+  // faixa fina colada numa parede. axis 'x': parede ao longo de X (z fixo = c), de a até b; axis 'z': parede ao longo de Z (x fixo = c)
+  const strip = (axis, c, a, b, y, h, mat, t = 0.012) =>
+    add(axis === 'x' ? box(b - a, h, t, mat, (a + b) / 2, y, c, { cast: false }) : box(t, h, b - a, mat, c, y, (a + b) / 2, { cast: false }));
+
+  // ---- materiais (estilo do vídeo): pedra clara, verde-escuro no box, carvalho, preto fosco, linho ----
+  const ceramic = std({ color: 0xf7f4ee, roughness: 0.2 });    // louça sanitária
+  const plastic = std({ color: 0xeeeae1, roughness: 0.5 });    // eletro/gabinete off-white
+  const grey    = std({ color: 0xcfc9bb, roughness: 0.6 });
+  const greyDk  = std({ color: 0x4a4b4d, roughness: 0.6 });
+  const tile    = std({ color: 0x35503f, roughness: 0.3 });    // verde-escuro (parede do box)
+  const tileDk  = std({ color: 0x24392d, roughness: 0.3 });    // friso verde mais escuro
+  const tileWh  = std({ color: 0xe9e3d5, roughness: 0.4 });    // pedra clara
+  const granite = std({ color: 0xece8de, roughness: 0.25 });   // bancada de mármore claro
+  const oak     = std({ color: 0xc9a672, roughness: 0.65 });
+  const walnut  = std({ color: 0x5a3d2b, roughness: 0.6 });
+  const blk     = std({ color: 0x17181a, roughness: 0.55, metalness: 0.25 });   // metais pretos foscos
+  const ledW    = std({ color: 0xfff1d4, emissive: 0xffc680, emissiveIntensity: 1.5 });
+  const towelW  = std({ color: 0xf3efe5, roughness: 1 });
+  const towelB  = std({ color: 0x8c9d7e, roughness: 1 });      // sálvia
+  const towelG  = std({ color: 0xd6ccb7, roughness: 1 });      // linho
+  const soapB   = std({ color: 0x9aab8e, roughness: 0.5 });
+  const soapG   = std({ color: 0xb8643f, roughness: 0.6 });    // terracota em detalhe
+  const rubber  = std({ color: 0x2a2b2d, roughness: 0.9 });
+  const gasMat  = std({ color: 0x232426, roughness: 0.55, metalness: 0.3 });
+  const bristle = std({ color: 0x7a8a62, roughness: 1 });
+  const cream   = M.cushion;
+
+  // =====================================================================
+  // BANHEIRO — x 0–2,4 · z 6,2–8,8 · porta em x=2,4 (z 7,0–7,9) abrindo p/ dentro
+  // faces internas: x 0,075–2,325 · z 6,275–8,725 · vão livre da porta: x > 1,5, z 6,9–8,0
+  // =====================================================================
+  const bx0 = 0.075, bx1 = 2.325, bz0 = 6.275, bz1 = 8.725;
+
+  // Piso de porcelanato/pedra clara com juntas finas (banheiro e dispensa), por cima do piso do cartao
+  const floorStone = std({ color: 0xe0d9c9, roughness: 0.45 });
+  const joint = std({ color: 0xb9b2a2, roughness: 0.8 });
+  const stoneFloor = (xa, xb, za, zb, step) => {
+    add(box(xb - xa, 0.006, zb - za, floorStone, (xa + xb) / 2, 0.004, (za + zb) / 2, { cast: false }));
+    for (let x = xa + step; x < xb - 0.01; x += step) add(box(0.01, 0.002, zb - za, joint, x, 0.0075, (za + zb) / 2, { cast: false }));
+    for (let z = za + step; z < zb - 0.01; z += step) add(box(xb - xa, 0.002, 0.01, joint, (xa + xb) / 2, 0.0075, z, { cast: false }));
+  };
+  stoneFloor(0.075, 2.325, 6.275, 8.725, 0.6);
+  stoneFloor(0.075, 2.325, 8.875, 10.525, 0.6);
+
+  // Azulejo: área do box revestida até 2,0 m; nas outras paredes só a barra a meia altura + friso
+  strip('z', bx0 + 0.006, bz0, 7.21, 1.0, 2.0, tile);
+  strip('x', bz0 + 0.006, bx0, 1.01, 1.0, 2.0, tile);
+  const band = (axis, c, a, b) => { strip(axis, c, a, b, 1.22, 0.12, tile); strip(axis, c, a, b, 1.29, 0.018, tileDk, 0.013); };
+  band('z', bx0 + 0.006, 7.21, bz1);   // parede x=0, depois do box
+  band('x', bz0 + 0.006, 1.01, bx1);   // parede z=6,2, depois do box
+  band('z', bx1 - 0.006, bz0, 7.0);    // parede x=2,4, antes da porta
+  band('z', bx1 - 0.006, 7.9, bz1);    // parede x=2,4, depois da porta
+  band('x', bz1 - 0.006, bx0, bx1);    // parede z=8,8
+
+  // ---- Box 0,9×0,9 no canto (x 0,1–1,0 · z 6,3–7,2), vidro para +x (porta de correr) e +z ----
+  const shower = (() => {
+    const g = G(); const s = 0.9, h = 1.9;
+    g.add(box(s, 0.05, s, ceramic, 0, 0.025, 0));                                   // bandeja
+    g.add(box(s - 0.1, 0.012, s - 0.1, grey, 0, 0.05, 0));                          // piso do box
+    g.add(box(0.12, 0.006, 0.12, blk, -0.22, 0.056, -0.22));                   // ralo: moldura
+    g.add(box(0.09, 0.005, 0.09, M.dark, -0.22, 0.06, -0.22));                      // ralo: fundo escuro
+    g.add(box(0.09, 0.004, 0.01, blk, -0.22, 0.063, -0.245));                  // ralo: barras da grelha
+    g.add(box(0.09, 0.004, 0.01, blk, -0.22, 0.063, -0.195));
+    g.add(box(0.01, h, s / 2 - 0.02, M.glass, s / 2, h / 2 + 0.05, -s / 4, { cast: false, receive: false }));            // vidro fixo (+x)
+    g.add(box(0.01, h, s / 2 - 0.02, M.glass, s / 2 + 0.025, h / 2 + 0.05, s / 4 - 0.01, { cast: false, receive: false })); // porta de correr (+x)
+    g.add(box(s - 0.02, h, 0.01, M.glass, 0, h / 2 + 0.05, s / 2, { cast: false, receive: false }));                    // vidro fixo (+z)
+    g.add(box(0.03, h + 0.04, 0.03, blk, s / 2, h / 2 + 0.05, s / 2));                    // montante do canto
+    g.add(box(0.03, h + 0.04, 0.03, blk, s / 2, h / 2 + 0.05, -s / 2 + 0.015));           // montante junto à parede z
+    g.add(box(0.03, h + 0.04, 0.03, blk, -s / 2 + 0.015, h / 2 + 0.05, s / 2));           // montante junto à parede x
+    g.add(box(0.05, 0.035, s, blk, s / 2 + 0.01, h + 0.07, 0));                           // trilho superior +x
+    g.add(box(s, 0.035, 0.03, blk, 0, h + 0.07, s / 2));                                  // trilho superior +z
+    g.add(box(0.05, 0.02, s, blk, s / 2 + 0.01, 0.06, 0));                                // trilho inferior +x
+    g.add(box(s, 0.02, 0.03, blk, 0, 0.06, s / 2));                                       // trilho inferior +z
+    g.add(box(0.03, 0.14, 0.02, blk, s / 2 + 0.045, 1.05, 0.1));                          // puxador da porta
+    return g;
+  })();
+  place(shower, 0.55, 6.75);
+
+  // ---- Nicho com xampus (na parede z=6,2, dentro do box, a 1,25–1,59 m) ----
+  const nicho = (() => {
+    const g = G();
+    g.add(box(0.4, 0.02, 0.1, tileWh, 0, -0.16, 0)); g.add(box(0.4, 0.02, 0.1, tileWh, 0, 0.16, 0));
+    g.add(box(0.02, 0.34, 0.1, tileWh, -0.19, 0, 0)); g.add(box(0.02, 0.34, 0.1, tileWh, 0.19, 0, 0));
+    g.add(box(0.36, 0.3, 0.01, tileDk, 0, 0, -0.045, { cast: false }));                // fundo azul
+    const frasco = (r, h, mat, cap, x, z) => {
+      g.add(cyl(r, r * 0.9, h, mat, x, -0.15 + h / 2, z, 10));
+      g.add(cyl(r * 0.45, r * 0.45, 0.025, cap, x, -0.15 + h + 0.012, z, 8));
+    };
+    frasco(0.03, 0.2, soapB, M.white, -0.12, 0.01);      // xampu
+    frasco(0.028, 0.17, M.white, soapB, -0.03, 0);       // condicionador
+    frasco(0.026, 0.13, soapG, M.dark, 0.06, 0.01);      // sabonete líquido
+    g.add(box(0.07, 0.025, 0.045, cream, 0.14, -0.137, 0.01));                         // sabonete em barra
+    return g;
+  })();
+  place(nicho, 0.55, 6.34, 0, 1.42);
+
+  // ---- Chuveiro elétrico com haste + registro (parede x=0, dentro do box) ----
+  const chuveiro = (() => {
+    const g = G();  // origem: face da parede x=0 na altura do registro
+    g.add(rod(0.03, 0.03, blk, 0.015, 0, 0, 'x', 12));                            // canopla
+    g.add(rod(0.012, 0.08, blk, 0.06, 0, 0, 'x', 8));                             // eixo do registro
+    g.add(box(0.012, 0.1, 0.012, blk, 0.1, 0, 0)); g.add(box(0.012, 0.012, 0.1, blk, 0.1, 0, 0)); // volante em cruz
+    g.add(rod(0.011, 0.86, blk, 0.03, 0.47, 0, 'y'));                             // haste (tubo vertical)
+    g.add(sph(0.017, blk, 0.03, 0.9, 0));                                         // cotovelo
+    g.add(rod(0.011, 0.32, blk, 0.19, 0.9, 0, 'x'));                              // braço
+    g.add(cyl(0.05, 0.07, 0.09, plastic, 0.35, 0.845, 0, 16));                         // corpo (chuveiro elétrico branco)
+    g.add(cyl(0.064, 0.064, 0.012, blk, 0.35, 0.795, 0, 16));                     // espalhador
+    g.add(cyl(0.022, 0.022, 0.035, M.dark, 0.35, 0.905, 0, 8));                        // conexão
+    const fio = rod(0.004, 0.72, M.dark, 0.35, 1.28, 0, 'y', 5); fio.castShadow = false; g.add(fio); // fio até o teto
+    return g;
+  })();
+  place(chuveiro, bx0, 6.75, 0, 1.15);
+
+  // ---- Vaso com caixa acoplada (caixa na parede x=0, virado para +x) ----
+  const toilet = (() => {
+    const g = G();  // caixa em -z, frente em +z
+    g.add(box(0.3, 0.46, 0.34, ceramic, 0, 0.23, -0.1));                               // base/pedestal
+    g.add(box(0.36, 0.34, 0.16, ceramic, 0, 0.62, -0.19));                             // caixa acoplada
+    g.add(box(0.38, 0.03, 0.18, ceramic, 0, 0.805, -0.19));                            // tampa da caixa
+    g.add(cyl(0.02, 0.02, 0.008, blk, 0, 0.824, -0.19, 12));                      // botão de descarga
+    const bowl = cyl(0.18, 0.13, 0.38, ceramic, 0, 0.21, 0.08, 16); bowl.scale.set(1, 1, 1.3); g.add(bowl);   // bacia
+    const seat = cyl(0.19, 0.19, 0.03, plastic, 0, 0.415, 0.08, 16); seat.scale.set(1, 1, 1.3); g.add(seat);  // assento
+    const lid = cyl(0.19, 0.19, 0.02, plastic, 0, 0.44, 0.08, 16); lid.scale.set(1, 1, 1.3); g.add(lid);      // tampa
+    g.add(cyl(0.055, 0.055, 0.1, towelW, 0.1, 0.87, -0.19, 12));                       // rolo reserva sobre a caixa
+    return g;
+  })();
+  place(toilet, 0.42, 8.3, PI / 2);
+
+  // ---- Papeleira (parede z=8,8), escova sanitária e lixeira com pedal ----
+  add(box(0.03, 0.04, 0.06, blk, 0.85, 0.72, 8.7));                                // suporte
+  add(rod(0.055, 0.1, towelW, 0.85, 0.7, 8.66, 'x', 12));                              // rolo
+  add(box(0.09, 0.1, 0.004, towelW, 0.85, 0.6, 8.6, { cast: false }));                 // ponta do papel
+  add(cyl(0.045, 0.04, 0.12, plastic, 0.95, 0.06, 8.64, 10));                          // escova: suporte
+  add(rod(0.008, 0.3, blk, 0.95, 0.27, 8.64, 'y', 6));                            // escova: cabo
+  add(cyl(0.015, 0.015, 0.03, M.dark, 0.95, 0.43, 8.64, 8));                           // escova: punho
+  add(cyl(0.1, 0.09, 0.28, M.steel, 1.28, 0.15, 8.6, 14));                             // lixeira: corpo
+  add(cyl(0.105, 0.105, 0.02, M.steel, 1.28, 0.3, 8.6, 14));                           // lixeira: tampa
+  add(box(0.06, 0.015, 0.05, M.dark, 1.28, 0.02, 8.47));                               // lixeira: pedal
+
+  // ---- Pia: gabinete branco, bancada de granito, cuba de apoio, torneira, armário espelhado ----
+  const basin = (() => {
+    const g = G();  // costas em -z (parede), frente em +z
+    g.add(box(0.54, 0.06, 0.38, greyDk, 0, 0.03, -0.02));                              // rodapé recuado
+    g.add(box(0.6, 0.72, 0.44, oak, 0, 0.42, 0));                                  // gabinete de carvalho
+    g.add(box(0.006, 0.66, 0.008, walnut, 0, 0.42, 0.222));                             // divisão das portas
+    g.add(rod(0.006, 0.1, blk, -0.08, 0.5, 0.235, 'y', 6)); g.add(rod(0.006, 0.1, blk, 0.08, 0.5, 0.235, 'y', 6)); // puxadores
+    g.add(box(0.66, 0.03, 0.48, granite, 0, 0.795, 0.01));                             // bancada
+    g.add(box(0.66, 0.08, 0.02, granite, 0, 0.85, -0.23));                             // rodabanca
+    const cuba = cyl(0.17, 0.14, 0.13, ceramic, 0, 0.875, 0.03, 24); cuba.scale.set(1, 1, 0.8); g.add(cuba);           // cuba de apoio (vessel)
+    const agua = cyl(0.145, 0.145, 0.004, grey, 0, 0.94, 0.03, 24); agua.scale.set(1, 1, 0.8); agua.castShadow = false; g.add(agua); // interior da cuba
+    g.add(rod(0.014, 0.14, blk, 0, 0.88, -0.17, 'y', 10));                        // torneira: corpo
+    g.add(rod(0.011, 0.12, blk, 0, 0.95, -0.11, 'z', 8));                         // torneira: bica
+    g.add(box(0.05, 0.012, 0.012, blk, 0, 0.96, -0.17));                          // torneira: alavanca
+    g.add(cyl(0.03, 0.03, 0.12, soapB, 0.22, 0.87, -0.1, 10)); g.add(rod(0.008, 0.05, blk, 0.22, 0.95, -0.1, 'y', 6));   // saboneteira com bomba
+    g.add(cyl(0.032, 0.028, 0.09, tileWh, -0.22, 0.855, -0.08, 10));                   // copo
+    g.add(rod(0.006, 0.17, soapG, -0.23, 0.92, -0.08, 'y', 6)); g.add(rod(0.006, 0.17, soapB, -0.21, 0.92, -0.07, 'y', 6)); // escovas de dente
+    g.add(box(0.74, 0.92, 0.03, ledW, 0, 1.52, -0.19, { cast: false }));               // halo de LED atrás do espelho
+    g.add(box(0.66, 0.84, 0.03, blk, 0, 1.52, -0.17));                                 // moldura preta fina
+    g.add(box(0.62, 0.8, 0.006, M.mirror, 0, 1.52, -0.151, { cast: false }));          // espelho
+    g.add(box(0.5, 0.04, 0.05, blk, 0, 0.905, -0.2));                                  // faixa preta na rodabanca
+    return g;
+  })();
+  place(basin, 1.95, 8.485, PI);
+  add(box(0.02, 0.05, 0.03, blk, 1.45, 1.12, 8.71));                               // gancho
+  add(box(0.16, 0.34, 0.025, towelB, 1.45, 0.94, 8.69));                                // toalha de rosto pendurada
+
+  // ---- Toalheiro (parede z=6,2): barra com toalhas penduradas + prateleira com toalhas dobradas ----
+  add(rod(0.012, 0.6, blk, 1.65, 1.2, 6.34, 'x', 8));                              // barra
+  add(box(0.025, 0.025, 0.07, blk, 1.38, 1.2, 6.31)); add(box(0.025, 0.025, 0.07, blk, 1.92, 1.2, 6.31)); // suportes
+  add(box(0.24, 0.6, 0.05, towelW, 1.52, 0.92, 6.345));                                 // toalha branca dobrada sobre a barra
+  add(box(0.24, 0.55, 0.05, towelB, 1.79, 0.945, 6.345));                               // toalha azul
+  add(box(0.6, 0.02, 0.26, blk, 1.65, 1.95, 6.41));                                // prateleira cromada
+  add(box(0.02, 0.1, 0.2, blk, 1.38, 1.9, 6.38)); add(box(0.02, 0.1, 0.2, blk, 1.92, 1.9, 6.38)); // mãos-francesas
+  add(box(0.34, 0.06, 0.22, towelW, 1.65, 1.99, 6.41));                                 // pilha de toalhas dobradas
+  add(box(0.34, 0.06, 0.22, towelB, 1.65, 2.05, 6.41));
+  add(box(0.34, 0.06, 0.22, towelG, 1.65, 2.11, 6.41));
+
+  // ---- Tapete de banheiro e ralo do piso ----
+  place(F.rug(0.6, 0.4, 0xd8cdb6), 1.1, 7.55);
+  add(box(0.1, 0.006, 0.1, blk, 0.5, 0.017, 7.65, { cast: false }));
+  add(box(0.07, 0.004, 0.07, M.dark, 0.5, 0.021, 7.65, { cast: false }));
+
+  // =====================================================================
+  // DISPENSA / ÁREA DE SERVIÇO — x 0–2,4 · z 8,8–10,6 · porta em x=2,4 (z 9,3–10,1)
+  // faces internas: x 0,075–2,325 · z 8,875–10,525 · vão livre da porta: x > 1,55, z 9,2–10,15
+  // =====================================================================
+  const dx0 = 0.075, dz0 = 8.875;
+  strip('x', dz0 + 0.005, dx0, 1.6, 0.75, 1.5, tileWh, 0.01);                          // azulejo branco atrás do tanque/máquina
+
+  // ---- Máquina de lavar (abertura superior) branca — x 0,15–0,75 · z 8,95–9,55 ----
+  const washer = (() => {
+    const g = G();  // costas em -z
+    g.add(box(0.56, 0.05, 0.56, greyDk, 0, 0.025, 0));                                 // base/pés
+    g.add(box(0.6, 0.9, 0.6, tileWh, 0, 0.5, 0));                                     // gabinete
+    g.add(box(0.6, 0.02, 0.6, grey, 0, 0.96, 0));                                      // tampo
+    g.add(box(0.5, 0.015, 0.4, plastic, 0, 0.977, 0.07));                              // tampa
+    g.add(box(0.44, 0.006, 0.34, M.glassDark, 0, 0.987, 0.07, { cast: false }));       // visor da tampa
+    g.add(box(0.6, 0.14, 0.12, plastic, 0, 1.03, -0.24));                              // painel traseiro
+    g.add(box(0.14, 0.05, 0.006, M.screenOff, -0.16, 1.05, -0.177, { cast: false }));  // display
+    g.add(rod(0.03, 0.02, M.dark, 0.12, 1.04, -0.17, 'z', 12));                        // seletor de programa
+    g.add(rod(0.02, 0.02, greyDk, 0.2, 1.04, -0.17, 'z', 10));                         // botão liga
+    g.add(rod(0.012, 0.5, greyDk, -0.2, 0.75, -0.32, 'y', 6));                         // mangueira de entrada (atrás)
+    g.add(rod(0.014, 0.4, rubber, 0.22, 0.2, -0.32, 'y', 6));                          // mangueira de saída
+    return g;
+  })();
+  place(washer, 0.45, 9.25);
+
+  // ---- Tanque de lavar roupa com coluna, esfregador, sabão, bucha e torneira de parede ----
+  const tank = (() => {
+    const g = G();  // costas em -z (z -0,25 = face da parede)
+    g.add(box(0.36, 0.62, 0.34, ceramic, 0, 0.31, -0.02));                             // coluna
+    g.add(box(0.55, 0.28, 0.5, ceramic, 0, 0.76, 0));                                  // cuba
+    g.add(box(0.47, 0.01, 0.42, grey, 0, 0.9, 0));                                     // fundo interno
+    const board = box(0.3, 0.012, 0.22, ceramic, -0.08, 0.915, 0.06); board.rotation.x = -0.3; g.add(board); // esfregador inclinado
+    g.add(box(0.07, 0.03, 0.045, cream, 0.2, 0.915, -0.2));                            // sabão em barra
+    g.add(box(0.1, 0.035, 0.07, soapG, 0.19, 0.918, 0.17));                            // bucha
+    g.add(rod(0.012, 0.17, blk, 0, 1.12, -0.165, 'z', 8));                        // cano saindo da parede
+    g.add(rod(0.011, 0.12, blk, 0, 1.07, -0.09, 'y', 8));                         // bica
+    g.add(box(0.05, 0.012, 0.012, blk, 0, 1.135, -0.2));                          // manípulo
+    return g;
+  })();
+  place(tank, 1.12, 9.125);
+
+  // ---- Prateleira de parede acima (z=8,8, y 1,55) com produtos de limpeza ----
+  add(box(1.2, 0.035, 0.22, oak, 0.8, 1.55, 8.985));                                   // prateleira flutuante lisa
+  add(box(1.12, 0.012, 0.02, ledW, 0.8, 1.52, 9.07, { cast: false }));                // fita LED sob a prateleira
+  add(box(0.16, 0.22, 0.09, soapB, 0.32, 1.673, 8.98));                                 // sabão em pó (caixa)
+  add(cyl(0.05, 0.045, 0.24, soapB, 0.56, 1.683, 8.98, 10)); add(cyl(0.02, 0.02, 0.03, M.white, 0.56, 1.818, 8.98, 8));   // amaciante
+  add(cyl(0.045, 0.04, 0.26, tileWh, 0.72, 1.693, 8.98, 10)); add(cyl(0.02, 0.02, 0.03, soapG, 0.72, 1.838, 8.98, 8));   // água sanitária
+  add(cyl(0.03, 0.028, 0.16, soapG, 0.86, 1.643, 8.98, 10));                            // detergente
+  add(box(0.12, 0.1, 0.1, cream, 1.02, 1.6125, 8.98));                                  // caixa (esponjas)
+  add(cyl(0.035, 0.035, 0.14, towelW, 1.2, 1.633, 8.98, 10));                           // pote de pregadores
+
+  // ---- Varal de teto (pendurado a 2,15 m sobre tanque/máquina) com roupas ----
+  const varal = (() => {
+    const g = G();  // laterais ao longo de z em x ±0,55; varetas ao longo de x
+    for (const sx of [-1, 1]) g.add(box(0.03, 0.03, 0.5, M.steel, sx * 0.55, 0, 0));
+    for (let i = 0; i < 5; i++) g.add(rod(0.007, 1.1, M.steel, 0, 0, -0.22 + i * 0.11, 'x', 6));
+    for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) { const c = rod(0.003, 0.65, M.dark, sx * 0.55, 0.325, sz * 0.24, 'y', 4); c.castShadow = false; g.add(c); } // cordas até o teto
+    g.add(box(0.36, 0.55, 0.03, towelW, -0.25, -0.27, 0.22));                          // toalha
+    g.add(box(0.4, 0.45, 0.02, towelG, 0.25, -0.22, 0.11));                            // camiseta
+    g.add(box(0.26, 0.6, 0.025, soapB, 0.15, -0.3, 0.22));                            // calça jeans
+    return g;
+  })();
+  place(varal, 0.8, 9.2, 0, 2.15);
+
+  // ---- Estante metálica (parede x=0, z 9,63–10,47) com potes, mantimentos e produtos ----
+  const rack = (() => {
+    const g = G(); const w = 0.84, d = 0.32, h = 1.75;
+    for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) g.add(box(0.02, h, 0.02, blk, sx * (w / 2 - 0.01), h / 2, sz * (d / 2 - 0.01)));
+    const ys = [0.1, 0.52, 0.94, 1.36, 1.75];
+    for (const y of ys) g.add(box(w, 0.028, d, oak, 0, y, 0));
+    const top = (i) => ys[i] + 0.0125;
+    const jar = (x, r, hh, content, y) => {                                            // pote de vidro com mantimento
+      g.add(cyl(r - 0.01, r - 0.01, hh - 0.04, content, x, y + (hh - 0.04) / 2, 0, 12));
+      const gl = cyl(r, r, hh, M.glass, x, y + hh / 2, 0, 12); gl.castShadow = false; g.add(gl);
+      g.add(cyl(r + 0.004, r + 0.004, 0.02, M.dark, x, y + hh + 0.01, 0, 12));
+    };
+    const pot = (x, r, hh, lid, y) => {                                                // pote plástico com tampa colorida
+      g.add(cyl(r, r * 0.92, hh, plastic, x, y + hh / 2, 0, 12));
+      g.add(cyl(r + 0.004, r + 0.004, 0.02, lid, x, y + hh + 0.01, 0, 12));
+    };
+    const bottle = (x, r, hh, mat, cap, y) => {
+      g.add(cyl(r, r * 0.95, hh, mat, x, y + hh / 2, 0, 10));
+      g.add(cyl(r * 0.4, r * 0.4, 0.03, cap, x, y + hh + 0.015, 0, 8));
+    };
+    let y = top(0);                                                                    // nível 0: balde e caixa
+    g.add(cyl(0.115, 0.095, 0.27, grey, -0.24, y + 0.135, 0, 14));
+    g.add(box(0.3, 0.22, 0.24, M.tan, 0.13, y + 0.11, 0));
+    y = top(1);                                                                        // nível 1: potes de vidro (feijão, arroz) e potes plásticos
+    jar(-0.29, 0.06, 0.22 + rnd() * 0.03, M.woodDark, y); jar(-0.14, 0.055, 0.18 + rnd() * 0.03, cream, y);
+    pot(0.02, 0.06, 0.15, soapB, y); pot(0.18, 0.05, 0.12, soapG, y);
+    y = top(2);                                                                        // nível 2: produtos de limpeza
+    bottle(-0.3, 0.045, 0.26, soapB, M.white, y); bottle(-0.18, 0.03, 0.2, cream, M.dark, y);
+    g.add(cyl(0.03, 0.03, 0.2, tileWh, -0.07, y + 0.1, 0, 10)); g.add(box(0.025, 0.06, 0.07, soapG, -0.07, y + 0.22, 0.01)); // multiuso spray
+    g.add(box(0.24, 0.2, 0.12, M.white, 0.2, y + 0.1, 0));                             // pacote de papel higiênico
+    y = top(3);                                                                        // nível 3: papel-toalha, pote grande, sabão em pó
+    g.add(cyl(0.055, 0.055, 0.23, towelW, -0.3, y + 0.115, 0, 12));
+    pot(-0.13, 0.07, 0.18, M.dark, y);
+    g.add(box(0.15, 0.2, 0.08, soapB, 0.1, y + 0.1, 0));
+    y = top(4);                                                                        // topo: panos dobrados
+    g.add(box(0.3, 0.05, 0.22, towelG, -0.2, y + 0.025, 0)); g.add(box(0.3, 0.05, 0.22, towelW, 0.15, y + 0.025, 0));
+    return g;
+  })();
+  place(rack, dx0 + 0.17, 10.05, PI / 2);
+
+  // ---- Botijão de gás reserva (P13) no canto z=10,6 ----
+  const gas = (() => {
+    const g = G();
+    g.add(cyl(0.155, 0.17, 0.03, gasMat, 0, 0.015, 0, 20));                            // saia/base
+    g.add(cyl(0.17, 0.17, 0.42, gasMat, 0, 0.24, 0, 20));                              // corpo
+    g.add(cyl(0.09, 0.17, 0.07, gasMat, 0, 0.485, 0, 20));                             // ombro
+    g.add(cyl(0.085, 0.085, 0.08, gasMat, 0, 0.56, 0, 12, true));                      // colar/alça
+    g.add(rod(0.02, 0.05, blk, 0, 0.545, 0, 'y', 8));                             // válvula
+    return g;
+  })();
+  place(gas, 0.62, 10.33);
+
+  // ---- Cesto de roupa suja (vime) ----
+  const basket = (() => {
+    const g = G();
+    g.add(cyl(0.19, 0.16, 0.5, M.tan, 0, 0.25, 0, 14));                                // corpo
+    g.add(cyl(0.2, 0.2, 0.025, cream, 0, 0.5125, 0, 14));                              // borda
+    g.add(cyl(0.17, 0.17, 0.02, towelG, 0, 0.53, 0, 12));                              // roupas dentro
+    g.add(box(0.02, 0.22, 0.14, towelB, 0.205, 0.42, 0));                              // toalha caindo pela borda
+    return g;
+  })();
+  place(basket, 1.45, 10.33);
+
+  // ---- Vassoura e rodo encostados na parede z=10,6 (pé afastado, topo apoiado na parede) ----
+  const stick = (len, x, z, lean, headFn) => {
+    const g = G(); g.add(rod(0.012, len, M.woodLite, 0, len / 2 + 0.1, 0, 'y', 6)); headFn(g);
+    place(g, x, z); g.rotation.x = lean; return g;
+  };
+  stick(1.3, 2.16, 10.24, 0.2, (g) => { g.add(box(0.27, 0.03, 0.06, M.wood, 0, 0.1, 0)); g.add(box(0.26, 0.09, 0.05, bristle, 0, 0.045, 0)); });          // vassoura
+  stick(1.35, 1.84, 10.22, 0.2, (g) => { g.add(box(0.38, 0.03, 0.03, M.wood, 0, 0.06, 0)); g.add(box(0.38, 0.05, 0.014, rubber, 0, 0.025, 0.012)); }); // rodo
+
+  // ---- Tábua de passar dobrada, encostada na parede x=2,4 antes da porta (z 8,93–9,27) ----
+  const tabua = (() => {
+    const g = G();  // em pé, origem no pé
+    g.add(box(0.03, 1.25, 0.34, cream, 0, 0.64, 0));                                   // tábua com capa
+    g.add(rod(0.008, 1.1, greyDk, -0.03, 0.6, -0.1, 'y', 6)); g.add(rod(0.008, 1.1, greyDk, -0.03, 0.6, 0.1, 'y', 6)); // pernas dobradas
+    return g;
+  })();
+  place(tabua, 2.17, 9.1); tabua.rotation.z = -0.1;
+}
+
+function roomGaragemJardim(ctx) {
+  const { THREE, M, box, cyl, sph, place, add, std, rnd } = ctx;
+  const G = () => new THREE.Group();
+  const V = (x, y, z) => new THREE.Vector3(x, y, z);
+  const j = (k) => (rnd() - 0.5) * 2 * k;                      // jitter determinístico ±k
+  const flat = (m) => { m.castShadow = false; return m; };     // peças rasteiras não projetam sombra
+
+  // Paleta local (estilo do vídeo): concreto claro, carvalho, preto fosco, verde-sálvia, terracota em detalhe, folhagem viva
+  const P = {
+    stone: std({ color: 0xbdb7aa, roughness: 0.95 }), stone2: std({ color: 0xd2ccbe, roughness: 0.95 }), stoneDk: std({ color: 0xa39d90, roughness: 0.95 }),
+    gravel: std({ color: 0xded8c9, roughness: 1 }), iron: std({ color: 0x232426, roughness: 0.85, metalness: 0.15 }), ironLt: std({ color: 0x3a3b3e, roughness: 0.8, metalness: 0.15 }),
+    rubber: std({ color: 0x34353a, roughness: 1 }), yellow: std({ color: 0xece4d0, roughness: 0.9 }), paintWhite: std({ color: 0xeeeae0, roughness: 0.9 }),
+    peg: std({ color: 0xcdb48a, roughness: 0.85 }), cardboard: std({ color: 0xd6cbb2, roughness: 1 }), crate: std({ color: 0x7c8a6a, roughness: 0.85 }),
+    binGreen: std({ color: 0x7e8c70, roughness: 0.85 }), binGreenDk: std({ color: 0x5f6b54, roughness: 0.85 }), binBlue: std({ color: 0x26272a, roughness: 0.85 }), binBlueDk: std({ color: 0x18191b, roughness: 0.85 }),
+    bike: std({ color: 0x74836a, roughness: 0.5, metalness: 0.2 }), hose: std({ color: 0x6f7f5f, roughness: 0.8 }), drill: std({ color: 0x2b2c2e, roughness: 0.7 }),
+    redTool: std({ color: 0xb2623f, roughness: 0.7 }), ceramic: std({ color: 0xe2d8c6, roughness: 0.85 }), plastic: std({ color: 0x8a8f8c, roughness: 0.7 }),
+    leafDk: std({ color: 0x2f7436, roughness: 1 }), leafLt: std({ color: 0x7fc043, roughness: 1 }), palm: std({ color: 0x4fa83e, roughness: 0.9 }), silver: std({ color: 0x8fb28a, roughness: 1 }),
+    pink: std({ color: 0xe0907a, roughness: 0.9 }), lilac: std({ color: 0xb9a4d6, roughness: 0.9 }), cream: std({ color: 0xf3ecdb, roughness: 0.9 }), lampGlass: std({ color: 0xffeccb, emissive: 0xffc98a, emissiveIntensity: 0.9, roughness: 0.5 }),
+    oak: std({ color: 0xc9a672, roughness: 0.7 }), walnut: std({ color: 0x5a3d2b, roughness: 0.65 }), black: std({ color: 0x1f2022, roughness: 0.8 }),
+    terra: std({ color: 0xb8643f, roughness: 0.9 }), linen: std({ color: 0xe4dac4, roughness: 0.95 }), led: std({ color: 0xfff0d0, emissive: 0xffc27a, emissiveIntensity: 1.4 }),
+  };
+
+  // ---- builders locais ------------------------------------------------------------------------
+  // cilindro entre dois pontos (tubos de bicicleta, galhos, mangueira)
+  const tube = (g, a, b, r, mat, seg = 8) => {
+    const A = V(...a), B = V(...b), d = B.clone().sub(A);
+    const m = cyl(r, r, d.length(), mat, 0, 0, 0, seg);
+    m.position.copy(A).add(B).multiplyScalar(0.5);
+    m.quaternion.setFromUnitVectors(V(0, 1, 0), d.normalize());
+    g.add(m); return m;
+  };
+  // toro (rodas, anéis de mangueira, cabeça de chave)
+  const torus = (r, t, mat, x, y, z, rx = 0, ry = 0, seg = 20) => {
+    const m = new THREE.Mesh(new THREE.TorusGeometry(r, t, 8, seg), mat);
+    m.position.set(x, y, z); m.rotation.set(rx, ry, 0); m.castShadow = true; m.receiveShadow = true; return m;
+  };
+  // folha comprida saindo de (cx,cy,cz): ângulo `a` no plano, inclinação `t` (positivo = caindo)
+  const frond = (g, cx, cy, cz, len, w, a, t, mat) => {
+    const m = box(len, 0.02, w, mat, 0, 0, 0), L = len / 2, ct = Math.cos(t);
+    m.position.set(cx + L * ct * Math.cos(a), cy - L * Math.sin(t), cz - L * ct * Math.sin(a));
+    m.rotation.set(0, a, -t);
+    g.add(m); return m;
+  };
+  const loose = G();                                          // tubos soltos no nível da cena
+
+  // =============================== GARAGEM (x 0–3 · z 10,6–16) ===============================
+  // Vaga: tapete de borracha + faixas amarelas (o up! do cartão fica em cima, centrado em (1,5, 13,6))
+  const slab = std({ color: 0xd8d4ca, roughness: 0.95 });
+  add(box(2.9, 0.01, 5.3, slab, 1.5, 0.012, 13.3, { cast: false }));
+  for (const z of [11.9, 13.3, 14.7]) add(box(2.9, 0.012, 0.012, P.stoneDk, 1.5, 0.014, z, { cast: false }));   // juntas de dilatação
+  add(box(1.8, 0.012, 3.8, P.rubber, 1.5, 0.02, 13.6, { cast: false }));
+  for (const x of [0.52, 2.48]) add(box(0.08, 0.008, 4.0, P.yellow, x, 0.02, 13.6, { cast: false }));
+  add(box(2.04, 0.008, 0.08, P.yellow, 1.5, 0.02, 11.62, { cast: false }));
+
+  // Armário de ferramentas (aço, tampo de madeira, 2 portas + 2 gavetas, maleta e lata em cima)
+  const toolCabinet = () => {
+    const g = G();
+    g.add(box(0.86, 0.05, 0.36, M.dark, 0, 0.025, 0));                       // rodapé
+    g.add(box(0.9, 0.85, 0.4, P.black, 0, 0.475, 0));                        // corpo (y 0,05–0,90)
+    g.add(box(0.96, 0.05, 0.46, P.oak, 0, 0.925, 0));                       // tampo
+    g.add(box(0.01, 0.55, 0.01, P.ironLt, 0, 0.34, 0.2));                      // frincha entre as portas
+    for (const sx of [-1, 1]) {
+      g.add(box(0.012, 0.3, 0.014, M.chrome, sx * 0.04, 0.4, 0.212));    // puxadores das portas
+      g.add(box(0.42, 0.22, 0.012, P.walnut, sx * 0.22, 0.76, 0.206));       // frentes das gavetas
+      g.add(box(0.26, 0.012, 0.014, M.chrome, sx * 0.22, 0.8, 0.216));        // puxadores das gavetas
+    }
+    g.add(box(0.4, 0.16, 0.2, P.terra, -0.2, 1.03, 0));                    // maleta de ferramentas
+    g.add(box(0.16, 0.02, 0.025, M.dark, -0.2, 1.12, 0));                    // alça
+    g.add(cyl(0.075, 0.075, 0.16, P.cream, 0.25, 1.03, -0.06, 14));           // lata de tinta
+    return g;
+  };
+  place(toolCabinet(), 0.55, 10.95);
+
+  // Painel de ferramentas (pegboard) na parede do fundo (z=10,6), acima do armário
+  add(box(1.5, 0.75, 0.02, P.peg, 0.9, 1.55, 10.686));
+  const zt = 10.712;                                                         // plano das ferramentas
+  add(box(0.03, 0.3, 0.025, M.wood, 0.35, 1.45, zt)); add(box(0.12, 0.05, 0.04, M.dark, 0.35, 1.62, zt));           // martelo
+  add(box(0.03, 0.26, 0.02, M.chrome, 0.62, 1.5, zt)); add(torus(0.035, 0.012, M.chrome, 0.62, 1.66, zt));            // chave fixa
+  add(box(0.2, 0.08, 0.06, P.drill, 1.35, 1.64, zt + 0.02)); add(box(0.05, 0.14, 0.05, M.dark, 1.31, 1.52, zt + 0.02)); // furadeira
+  const chuck = cyl(0.02, 0.02, 0.06, M.chrome, 1.48, 1.64, zt + 0.02, 8); chuck.rotation.z = Math.PI / 2; add(chuck);   // mandril
+  add(box(0.34, 0.09, 0.006, M.steel, 1.0, 1.3, zt)); add(box(0.1, 0.1, 0.02, M.wood, 1.22, 1.3, zt));             // serrote
+  add(box(0.4, 0.04, 0.025, P.yellow, 0.5, 1.28, zt));                                                             // nível
+
+  // Prateleira alta com caixas (parede do fundo, y 2,2)
+  add(box(2.7, 0.03, 0.35, P.oak, 1.45, 2.2, 10.86));
+  add(box(2.6, 0.012, 0.02, P.led, 1.45, 2.18, 10.95, { cast: false }));          // fita LED sob a prateleira
+  for (const x of [0.4, 2.5]) add(box(0.03, 0.26, 0.3, P.black, x, 2.06, 10.85));
+  add(box(0.5, 0.36, 0.32, P.cardboard, 0.45, 2.395, 10.86));
+  add(box(0.4, 0.28, 0.3, P.cardboard, 1.05, 2.355, 10.86));
+  add(box(0.45, 0.3, 0.32, P.crate, 1.6, 2.365, 10.86));
+  add(box(0.34, 0.24, 0.28, P.cardboard, 2.25, 2.335, 10.86));
+
+  // Bicicleta encostada na parede x=0 (frente em -z; rodas = toros, quadro = tubos)
+  const bicycle = () => {
+    const g = G(), R = [0, 0.355, 0.52], F = [0, 0.355, -0.52], BB = [0, 0.3, 0.08], S = [0, 0.86, 0.25], Hb = [0, 0.7, -0.4], H = [0, 0.86, -0.35];
+    for (const w of [R, F]) g.add(torus(0.33, 0.025, M.tire, w[0], w[1], w[2], 0, Math.PI / 2, 24));
+    for (const [a, b] of [[BB, S], [BB, Hb], [S, H], [BB, R], [S, R], [Hb, F], [Hb, H]]) tube(g, a, b, 0.016, P.bike);
+    tube(g, S, [0, 0.98, 0.28], 0.012, M.chrome);                             // canote
+    g.add(box(0.12, 0.05, 0.26, M.dark, 0, 1.0, 0.3));                       // selim
+    const bar = cyl(0.012, 0.012, 0.48, M.dark, 0, 0.95, -0.4, 8); bar.rotation.z = Math.PI / 2; g.add(bar);   // guidão
+    return g;
+  };
+  const bike = place(bicycle(), 0.42, 12.7); bike.rotation.z = 0.07;         // leve inclinação contra a parede
+
+  // Mangueira enrolada pendurada num gancho (parede x=0, perto do portão)
+  add(box(0.08, 0.03, 0.1, P.ironLt, 0.115, 1.0, 15.2));
+  add(torus(0.2, 0.03, P.hose, 0.17, 0.8, 15.2, 0, Math.PI / 2, 24));
+  add(cyl(0.015, 0.015, 0.14, P.hose, 0.2, 0.52, 15.1, 8));
+
+  // Lixeiras no canto do fundo, balde, quadro de luz junto ao portão
+  add(cyl(0.2, 0.18, 0.62, P.binGreen, 2.62, 0.31, 10.95, 14)); add(cyl(0.22, 0.2, 0.05, P.binGreenDk, 2.62, 0.645, 10.95, 14));
+  add(cyl(0.18, 0.16, 0.55, P.binBlue, 2.18, 0.275, 10.95, 14)); add(cyl(0.2, 0.18, 0.05, P.binBlueDk, 2.18, 0.575, 10.95, 14));
+  add(cyl(0.14, 0.12, 0.28, P.plastic, 1.4, 0.14, 10.92, 12));
+  add(box(0.06, 0.32, 0.24, P.paintWhite, 0.105, 1.6, 15.55));
+
+  // ============================ JARDIM (grama x 10,9–13,4 · z 6,2–12,4) ============================
+  // Canteiro ao longo do muro (x=13,4): terra + borda de pedra em segmentos irregulares
+  add(box(0.7, 0.05, 5.3, M.soil, 12.94, 0.03, 9.07, { cast: false }));
+  for (let i = 0; i < 4; i++) {
+    const h = 0.1 + rnd() * 0.05, s = box(0.14, h, 1.31, i % 2 ? P.stone2 : P.stone, 12.55 + j(0.01), h / 2, 7.07 + i * 1.335);
+    s.rotation.y = j(0.03); add(s);
+  }
+  for (const z of [6.4, 11.75]) add(box(0.77, 0.12, 0.14, P.stone, 12.935, 0.06, z));
+  // Pedriscos: faixa entre o caminho e o canteiro + roda em volta da árvore
+  add(box(0.25, 0.012, 5.1, P.gravel, 12.375, 0.018, 9.05, { cast: false }));
+  add(flat(cyl(0.5, 0.5, 0.014, P.gravel, 12.3, 0.02, 11.9, 20)));
+
+  // Árvore (tronco afunilado, 3 galhos, copa em três verdes; copa puxada para o lado do deck, longe da arandela)
+  const tree = () => {
+    const g = G();
+    g.add(cyl(0.1, 0.15, 2.1, M.trunk, 0, 1.05, 0, 10));
+    tube(g, [0, 1.85, 0], [-0.5, 2.5, 0.25], 0.05, M.trunk); tube(g, [0, 1.95, 0], [0.3, 2.55, -0.35], 0.045, M.trunk); tube(g, [0, 2.05, 0], [-0.15, 2.75, -0.4], 0.04, M.trunk);
+    const balls = [[-0.45, 2.6, 0.25, 0.6], [0.3, 2.65, -0.35, 0.55], [-0.15, 2.95, -0.35, 0.55], [0.35, 2.45, 0.3, 0.5], [-0.6, 2.3, -0.15, 0.48], [0.05, 3.2, 0.05, 0.5]];
+    balls.forEach(([x, y, z, r], i) => g.add(sph(r + j(0.03), [M.plant, M.leaf2, P.leafDk][i % 3], x + j(0.05), y, z + j(0.05))));
+    return g;
+  };
+  place(tree(), 12.3, 11.9);
+
+  // Palmeiras pequenas: tronco em anéis + folhas caídas em leque (abrem para o lado do jardim, não para o muro)
+  const palm = (h, n, len, w, segs) => {
+    const g = G(); const sh = h / segs;
+    for (let i = 0; i < segs; i++) g.add(cyl(0.06 - i * 0.008, 0.075 - i * 0.008, sh, i % 2 ? M.trunk : M.woodDark, 0, sh * (i + 0.5), 0, 8));
+    for (let i = 0; i < n; i++) { const a = Math.PI + (i - (n - 1) / 2) * (3.6 / (n - 1)); frond(g, 0, h, 0, len, w, a + j(0.08), 0.35 + rnd() * 0.4, i % 2 ? P.palm : M.leaf2); }
+    g.add(sph(0.07, P.leafLt, 0, h + 0.03, 0));
+    return g;
+  };
+  place(palm(1.45, 6, 1.0, 0.18, 2), 12.95, 7.3);
+  place(palm(0.95, 5, 0.75, 0.15, 1), 12.95, 10.0);
+
+  // Arbustos (3 esferas em verdes diferentes) e touceiras com flores discretas
+  const shrub = (x, z, s, m1, m2) => {
+    add(sph(0.32 * s, m1, x, 0.28 * s, z)); add(sph(0.25 * s, m2, x - 0.18 * s, 0.26 * s, z + 0.15 * s)); add(sph(0.22 * s, P.leafLt, x + 0.13 * s, 0.32 * s, z - 0.17 * s));
+  };
+  shrub(12.9, 6.78, 1.0, P.leafDk, M.leaf2); shrub(12.95, 8.9, 0.85, M.plant, P.silver); shrub(12.9, 11.25, 0.95, P.leafDk, M.plant);
+  const flowers = (x, z, bloom, r = 0.05, tall = 1) => {
+    add(sph(0.2, M.leaf2, x, 0.16, z));
+    for (let i = 0; i < 2; i++) { const a = rnd() * Math.PI * 2, d = 0.06 + rnd() * 0.1; const b = sph(r, bloom, x + Math.cos(a) * d, 0.3 + rnd() * 0.05, z + Math.sin(a) * d); b.scale.y = tall; add(b); }
+  };
+  flowers(13.0, 7.95, P.pink); flowers(12.95, 8.45, P.cream, 0.04); flowers(12.95, 10.65, P.lilac, 0.035, 2.4);
+
+  // Jardineira longa de carvalho com folhagem junto ao vidro da varanda + vasos grandes (creme e terracota)
+  add(box(1.3, 0.42, 0.4, P.oak, 11.3, 0.21, 6.7)); add(box(1.2, 0.02, 0.3, M.soil, 11.3, 0.43, 6.7, { cast: false }));
+  for (let i = 0; i < 5; i++) { const b = sph(0.17 + rnd() * 0.05, [P.leafDk, P.palm, P.leafLt][i % 3], 10.85 + i * 0.23, 0.58 + rnd() * 0.08, 6.7); b.scale.y = 1.15; add(b); }
+  const bigPot = (x, z, mat, h, plant) => {
+    add(cyl(0.3, 0.24, h, mat, x, h / 2, z, 20)); add(cyl(0.27, 0.27, 0.02, M.soil, x, h, z, 16));
+    const gp = G(); for (let i = 0; i < 6; i++) frond(gp, 0, h, 0, 0.7, 0.1, i * 1.047 + j(0.15), -1.1 + rnd() * 0.3, i % 2 ? P.leafLt : plant); place(gp, x, z);
+    add(sph(0.2, plant, x, h + 0.25, z));
+  };
+  bigPot(11.25, 8.4, P.ceramic, 0.62, P.palm); bigPot(11.2, 10.9, P.terra, 0.55, P.leafDk);
+
+  // Caminho de lajotas: pátio → jardim → varanda (desvia do tronco), e da varanda ao deck (porta e vidro)
+  const stone = (x, z, i) => { const s = box(0.42, 0.03, 0.34, [P.stone, P.stone2, P.stoneDk][i % 3], x + j(0.04), 0.03, z, { cast: false }); s.rotation.y = j(0.12); add(s); };
+  for (let i = 0; i < 9; i++) { const z = 6.55 + i * 0.72; stone(12.0 - 0.12 * Math.min(1, Math.max(0, (z - 10.8) / 1.2)), z, i); }
+  [[3.35, 6.5], [3.35, 6.9], [10.0, 6.5], [10.0, 6.9]].forEach(([x, z], i) => stone(x, z, i));
+
+  // Balizadores minimalistas (coluna preta fosca com fenda de luz âmbar)
+  for (const z of [7.0, 9.2, 11.25]) {
+    add(box(0.07, 0.5, 0.07, P.black, 12.34, 0.25, z)); add(box(0.075, 0.1, 0.012, P.led, 12.34, 0.42, z + 0.04, { cast: false })); add(box(0.08, 0.02, 0.08, P.ironLt, 12.34, 0.51, z));
+  }
+
+  // Torneira de jardim no muro (perto da bomba) + mangueira enrolada na grama
+  add(cyl(0.012, 0.012, 0.62, M.chrome, 13.3, 0.31, 12.2, 8));
+  const tapBody = cyl(0.02, 0.02, 0.1, M.chrome, 13.25, 0.62, 12.2, 8); tapBody.rotation.z = Math.PI / 2; add(tapBody);
+  add(box(0.05, 0.012, 0.012, P.redTool, 13.2, 0.66, 12.2)); add(cyl(0.01, 0.01, 0.08, M.chrome, 13.2, 0.57, 12.2, 8));
+  add(torus(0.22, 0.022, P.hose, 12.85, 0.03, 12.15, Math.PI / 2, 0, 24));
+  tube(loose, [13.2, 0.53, 12.2], [12.98, 0.05, 12.34], 0.013, P.hose);
+
+  // ======================= PÁTIO / ENTRADA (asfalto x 2,4–13,4 · z 12,4–16,6) =======================
+  // Vaga de visitante pintada no asfalto, em frente ao vão da garagem (x 3,4–8,0 · z 12,95–15,35) + calço de roda
+  for (const z of [12.95, 15.35]) add(box(4.6, 0.006, 0.1, P.paintWhite, 5.7, 0.018, z, { cast: false }));
+  add(box(0.1, 0.006, 2.5, P.paintWhite, 8.0, 0.018, 14.15, { cast: false }));
+  add(box(0.15, 0.1, 0.55, P.yellow, 7.6, 0.05, 14.15));
+
+  // Caixa de correio na face interna do muro, ao lado do portão de pedestre (x 5,6–6,6)
+  add(box(0.3, 0.22, 0.14, M.white, 5.25, 1.35, 15.855)); add(box(0.22, 0.02, 0.012, M.dark, 5.25, 1.42, 15.78)); add(box(0.02, 0.1, 0.04, P.redTool, 5.42, 1.42, 15.84));
+
+  // Lixeira com rodas, banco de pedra e vaso grande com buxinho junto ao portão
+  add(box(0.5, 0.85, 0.55, P.binGreen, 4.6, 0.5, 15.6)); add(box(0.54, 0.06, 0.59, P.binGreenDk, 4.6, 0.955, 15.6));
+  for (const sx of [-1, 1]) { const w = cyl(0.09, 0.09, 0.05, M.dark, 4.6 + sx * 0.27, 0.09, 15.82, 12); w.rotation.z = Math.PI / 2; add(w); }
+  add(box(1.4, 0.07, 0.42, P.oak, 9.6, 0.445, 15.65)); for (const sx of [-1, 1]) add(box(0.14, 0.41, 0.36, P.stone, 9.6 + sx * 0.55, 0.205, 15.65));
+  add(cyl(0.3, 0.26, 0.65, P.ceramic, 7.1, 0.325, 15.6, 20)); add(cyl(0.27, 0.27, 0.02, M.soil, 7.1, 0.65, 15.6, 16));
+  add(sph(0.36, P.leafDk, 7.1, 1.0, 15.6)); add(sph(0.22, P.leafLt, 7.25, 1.17, 15.5));
+  add(box(1.5, 0.34, 0.34, P.oak, 11.6, 0.17, 15.65)); add(box(1.4, 0.02, 0.26, M.soil, 11.6, 0.35, 15.65, { cast: false }));   // jardineira de carvalho junto ao muro
+  for (let i = 0; i < 4; i++) add(sph(0.16 + rnd() * 0.04, [P.leafDk, P.palm, P.leafLt, P.silver][i], 11.15 + i * 0.32, 0.5, 15.65));
+
+  // Tampa de bueiro redonda no meio do pátio e grelha de escoamento junto ao muro
+  add(flat(cyl(0.3, 0.3, 0.02, P.iron, 10.3, 0.022, 14.6, 20))); add(flat(cyl(0.24, 0.24, 0.008, P.ironLt, 10.3, 0.036, 14.6, 20)));
+  add(box(0.4, 0.02, 0.3, P.iron, 4.0, 0.02, 15.35, { cast: false })); for (let i = 0; i < 3; i++) add(box(0.03, 0.012, 0.28, P.ironLt, 3.9 + i * 0.1, 0.034, 15.35, { cast: false }));
+
+  place(loose, 0, 0);
+}
+// @rooms-end
+
+// ---------------------------------------------------------------------------
+// O cartão
+// ---------------------------------------------------------------------------
+// título: a última palavra vira a serifa itálica de destaque (sem innerHTML: o texto vem da configuração)
+function setTitle(el, text) {
+  const w = String(text).trim().split(/\s+/), last = w.pop(); el.replaceChildren();
+  if (w.length) el.append(w.join(' ') + ' ');
+  const e = document.createElement('em'); e.textContent = last; el.appendChild(e);
+}
+
+const CSS = `
+:host { display: block; position: relative; height: var(--casa3d-height, calc(100vh - 100px)); min-height: 360px;
+  border-radius: var(--ha-card-border-radius, 12px); overflow: hidden; overflow: clip; background: #070b18;   /* clip: foco e scrollIntoView não rolam o cartão */
+  font: 13px/1.35 var(--casa3d-font, "Inter", "Manrope", -apple-system, BlinkMacSystemFont, var(--primary-font-family, "Segoe UI", Roboto, system-ui, sans-serif)); color: var(--ink);   /* SF nos aparelhos Apple; nos outros, a fonte do tema do HA */
+  -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale;
+  /* Paleta v1.9: cores de sistema do iOS escuro (referência: app Casa do iOS 17/18, sem Liquid Glass). Ligado = âmbar · estrutura = grafite ·
+     foco e seleção = azul · indisponível = vermelho. Contraste no pior fundo: texto ≥ 4,5:1, ícone e controle ≥ 3:1 */
+  --serif: "Instrument Serif", "Cormorant Garamond", Georgia, "Times New Roman", serif;   /* noite: serifa itálica só numa palavra */
+  --glass: #11151f;                       /* coluna e folha (secondarySystemBackground), opaca; vidro só no .wrap.glass */
+  --glass-solid: #11151f;                 /* menos transparência */
+  --raised: #1b2030;                      /* bloco desligado, lista agrupada, ajustes (tertiarySystemBackground) */
+  --fill: rgba(118, 118, 128, .24);       /* trilho do segmentado, círculo do ícone, cápsulas */
+  --fill-2: rgba(120, 120, 128, .32);     /* botão neutro */
+  --fill-3: rgba(120, 120, 128, .36);     /* interruptor desligado, trilho do slider */
+  --line: rgba(84, 84, 88, .65);          /* separator */
+  --line-2: rgba(235, 235, 245, .18);     /* quaternaryLabel */
+  --ink: #fff; --ink-2: rgba(235, 235, 245, .6); --ink-3: rgba(235, 235, 245, .6);   /* label · secondaryLabel 5,95:1 no #1c1c1e e 5,27:1 no #2c2c2e (o tertiaryLabel não chega a 4,5:1) */
+  --on: #ffb547; --on-ink: #2b1800; --on-bg: rgba(255, 181, 71, .16); --on-line: rgba(255, 181, 71, .5);
+  --off: var(--ink-3); --off-bg: var(--raised); --off-ink: var(--ink-2);
+  --alert: #ff6961;                       /* indisponível: systemRed de alto contraste (4,9:1 no #2c2c2e) */
+  --focus: #409cff;                       /* foco e seleção: systemBlue de alto contraste (âmbar quer dizer "ligado") */
+  --ease: cubic-bezier(.32, .72, 0, 1);   /* curva da folha do iOS */
+  --seg: #636366; --seg-line: rgba(255, 255, 255, .3);   /* polegar do segmentado e o fio dele */
+  --tile-on: #e5e5ea; --tile-on-ink: #000; --tile-on-ink-2: #545458;   /* bloco ligado: claro; nome 16,7:1 · estado 6,0:1 */
+  --mat-chrome: #11151f; --mat-pop: #1b2030;   /* HUD · menu, balão, "Ir para…" (opacos fora do vidro) */
+  --blur: none; --blur-s: none;
+  --check: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 256 256'%3E%3Cpath d='M232.49,80.49l-128,128a12,12,0,0,1-17,0l-56-56a12,12,0,1,1,17-17L96,183,215.51,63.51a12,12,0,0,1,17,17Z'/%3E%3C/svg%3E");   /* Phosphor check (bold) */
+  -webkit-tap-highlight-color: transparent; color-scheme: dark; }   /* sem o flash de toque do Android (o retorno é o :active) · controles nativos escuros */
+.wrap { position: absolute; inset: 0; }
+/* ---- look maquete: painel do cômodo à direita (layout do vídeo), pontinhos, vidro escuro ---- */
+.wrap.maq .dock, .wrap.maq .reopen, .wrap.maq .pegdica, .wrap.maq .goto { display: none !important; }
+.hots { position: absolute; inset: 0; pointer-events: none; z-index: 4; overflow: hidden; }
+.hots[hidden] { display: none; }
+.hot { position: absolute; left: 0; top: 0; width: 30px; height: 30px; margin: -15px 0 0 -15px; padding: 0; border: 0; border-radius: 50%; background: transparent; cursor: pointer; pointer-events: auto; will-change: transform; }
+.hot::before { content: ""; position: absolute; inset: 10px; border-radius: 50%; background: #fff; box-shadow: 0 0 0 3px rgba(255, 255, 255, .26), 0 2px 10px rgba(0, 0, 0, .45); transition: transform .2s var(--ease), box-shadow .2s; }
+.hot::after { content: ""; position: absolute; inset: 4px; border-radius: 50%; border: 1px solid rgba(255, 255, 255, .5); opacity: 0; transform: scale(.6); animation: hotPulse 3.2s ease-out infinite; }
+.hot:hover::before, .hot:focus-visible::before { transform: scale(1.35); box-shadow: 0 0 0 5px rgba(255, 255, 255, .3), 0 2px 12px rgba(0, 0, 0, .5); }
+.hot.sel::before { background: #ffd08a; box-shadow: 0 0 0 4px rgba(255, 190, 90, .38), 0 0 16px rgba(255, 180, 80, .7); }
+.hot:focus-visible { outline: 2px solid #fff; outline-offset: -2px; }
+@keyframes hotPulse { 0% { opacity: .7; transform: scale(.55); } 70%, 100% { opacity: 0; transform: scale(1.5); } }
+.mpan { position: absolute; right: 18px; top: 64px; width: 316px; max-height: calc(100% - 84px); overflow-y: auto; overscroll-behavior: contain; box-sizing: border-box; z-index: 8;
+  padding: 22px 22px 20px; background: #0e1424; border: 1px solid rgba(255, 255, 255, .08); border-radius: 16px; color: #f2efe8;
+  box-shadow: 0 28px 70px rgba(0, 0, 0, .5); opacity: 0; transform: translateX(28px); pointer-events: none; visibility: hidden;
+  transition: opacity .35s var(--ease), transform .45s var(--ease), visibility 0s .45s; scrollbar-width: thin; scrollbar-color: rgba(255, 255, 255, .2) transparent; }
+.mpan.open { opacity: 1; transform: none; pointer-events: auto; visibility: visible; transition: opacity .35s var(--ease), transform .45s var(--ease), visibility 0s; }
+.mpan .mp1 { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.mpan .mpe { font-size: 10.5px; letter-spacing: .2em; text-transform: uppercase; color: rgba(235, 235, 245, .6); }
+.mpan .mpill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px; border: 1px solid rgba(255, 255, 255, .26); border-radius: 3px; font-size: 9.5px; letter-spacing: .16em; text-transform: uppercase; color: #f2efe8; white-space: nowrap; }
+.mpan .mpill i { width: 5px; height: 5px; border-radius: 50%; background: #7d8494; flex: none; }
+.mpan .mpill em { font-style: normal; }
+.mpan .mpill.on i { background: #ffb547; box-shadow: 0 0 8px #ffb547; }
+.mpan h2 { margin: 14px 0 20px; font-weight: 300; font-size: 36px; line-height: 1.06; letter-spacing: -.025em; color: #f6f3ec; overflow-wrap: anywhere; }
+.mpan .mpn { display: grid; grid-template-columns: repeat(3, 1fr); padding-bottom: 16px; border-bottom: 1px solid rgba(255, 255, 255, .1); }
+.mpan .mpn > div { padding: 0 12px; border-left: 1px solid rgba(255, 255, 255, .12); min-width: 0; }
+.mpan .mpn > div:first-child { padding-left: 0; border-left: 0; }
+.mpan .mpn b { display: block; font-family: var(--serif); font-weight: 400; font-size: 31px; line-height: 1.05; color: #f6f3ec; font-variant-numeric: lining-nums; }
+.mpan .mpn small { display: block; margin-top: 3px; font-size: 10px; line-height: 1.2; color: rgba(235, 235, 245, .5); }
+.mpan .mph { margin: 16px 0 6px; font-family: var(--serif); font-size: 27px; line-height: 1.1; color: #e3c68c; }
+.mpan p { margin: 0 0 14px; font-size: 12.5px; line-height: 1.55; color: rgba(235, 235, 245, .66); }
+.mpan ol { list-style: none; margin: 0; padding: 0; border-top: 1px solid rgba(255, 255, 255, .1); }
+.mpan li button { width: 100%; display: flex; align-items: center; gap: 12px; padding: 11px 0; margin: 0; background: none; border: 0; border-bottom: 1px solid rgba(255, 255, 255, .1); color: #f2efe8; font: inherit; font-size: 13px; text-align: left; cursor: pointer; }
+.mpan li button:hover .t { color: #fff; }
+.mpan li button:focus-visible, .mpan .mpb button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; border-radius: 4px; }
+.mpan li .n { width: 18px; flex: none; font-size: 10px; color: rgba(235, 235, 245, .38); font-variant-numeric: tabular-nums; }
+.mpan li .t { flex: 1; min-width: 0; }
+.mpan li .st { display: inline-flex; align-items: center; gap: 9px; flex: none; font-size: 11px; color: rgba(235, 235, 245, .5); }
+.mpan li .st em { font-style: normal; max-width: 96px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mpan li .sw { position: relative; width: 28px; height: 16px; border-radius: 8px; background: rgba(255, 255, 255, .16); transition: background .25s; }
+.mpan li .sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: #cfcac0; transition: transform .25s var(--ease), background .25s; }
+.mpan li.on .sw { background: #e0a64a; }
+.mpan li.on .sw::after { transform: translateX(12px); background: #fff; }
+.mpan li.on .st { color: #e3c68c; }
+.mpan .mpb { display: flex; gap: 10px; margin-top: 20px; }
+.mpan .mpb button { flex: 1; padding: 11px 12px; border-radius: 999px; font: inherit; font-size: 12.5px; cursor: pointer; white-space: nowrap; transition: background .2s, transform .15s; }
+.mpan .mpb .b1 { background: #f1ece1; border: 1px solid #f1ece1; color: #14110b; }
+.mpan .mpb .b1:hover { background: #fff; }
+.mpan .mpb .b1:disabled { opacity: .4; cursor: default; }
+.mpan .mpb .b2 { background: transparent; border: 1px solid rgba(255, 255, 255, .3); color: #f2efe8; }
+.mpan .mpb .b2:hover { background: rgba(255, 255, 255, .08); }
+.mpan .mpb button:active { transform: scale(.97); }
+@media (max-width: 699px) {
+  .mpan { left: 10px; right: 10px; top: auto; bottom: 10px; width: auto; max-height: 55%; padding: 16px 18px 16px; transform: translateY(40px); }
+  .mpan h2 { font-size: 28px; margin: 8px 0 12px; }
+  .mpan .mpn b { font-size: 25px; }
+  .mpan .mph { font-size: 22px; margin-top: 12px; }
+}
+@media (prefers-reduced-motion: reduce) { .mpan, .mpan.open { transition: opacity .1s linear, visibility 0s; transform: none; } .hot::after { animation: none; } }
+.wrap:not(.sf) * { letter-spacing: 0 !important; }   /* tracking calibrado para o SF: na Roboto, na Segoe e na fonte do tema fica o desenho dela */
+.wrap.glass { --glass: rgba(12, 16, 28, .66); --mat-chrome: rgba(12, 16, 28, .55); --mat-pop: rgba(16, 21, 36, .78); --blur: blur(30px) saturate(180%); --blur-s: blur(20px) saturate(180%);
+  --ink-2: rgba(235, 235, 245, .8); --ink-3: rgba(235, 235, 245, .8); --seg-line: rgba(255, 255, 255, .5); }   /* vidro (nível alta, GPU dedicada; o governador o tira): o cinza sobe ("vibrancy"), 4,5:1 até na cápsula com a cena branca atrás; o fio do segmento, 3,3:1 */
+.wrap.glass :is(button, .tile, input):focus-visible { box-shadow: 0 0 0 2px #000; }   /* sobre o vidro o azul sozinho dá 2,9:1: anel duplo, como sobre a cena */
+canvas { display: block; width: 100%; height: 100%; touch-action: none; outline: none; cursor: grab; }
+.wrap, canvas { -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }   /* duplo toque/clique num móvel não vira seleção de texto azul do navegador (nem o menu de copiar do iOS) */
+canvas.pick { cursor: pointer; }
+canvas:active { cursor: grabbing; }
+.hud { position: absolute; left: 0; right: 0; display: flex; gap: 8px; padding: 10px; pointer-events: none; box-sizing: border-box; }
+.hud > * { pointer-events: auto; }
+.hud.top { top: 0; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; }
+.panel { background: var(--mat-chrome); border: 0; border-radius: 14px; backdrop-filter: var(--blur-s); -webkit-backdrop-filter: var(--blur-s);
+  box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .12), 0 4px 16px rgba(0, 0, 0, .22); }   /* HUD: material de barra, fio claro de 0,5 px por dentro */
+.title { padding: 8px 14px; display: flex; flex-direction: column; gap: 1px; }   /* 2 linhas: nome + clima · hora + luzes */
+.title b { font-size: 17px; line-height: 22px; font-weight: 600; letter-spacing: -.025em; }
+.title .sub { color: var(--ink-2); font-size: 13px; line-height: 18px; letter-spacing: -.006em; font-variant-numeric: tabular-nums; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.title .clock { color: var(--ink); font-weight: 600; }
+.title .clock .per { color: var(--on); }
+/* Clima (v1.5.1): só ícone + temperatura, à direita do nome; os detalhes ficam no topo do menu ☰ */
+.title .cline { display: flex; align-items: center; gap: 12px; }
+.title .wx { margin-left: auto; display: inline-flex; align-items: center; gap: 3px; font-size: 15px; font-weight: 500; letter-spacing: -.015em; font-variant-numeric: tabular-nums; color: var(--ink); }
+.title .wx svg { width: 15px; height: 15px; color: var(--ink); } .title .wx[hidden] { display: none; }   /* âmbar só no que está ligado */
+.menu .mwx .wd { padding: 0 16px 10px; font-size: 15px; line-height: 20px; letter-spacing: -.015em; color: var(--ink); } .menu .mwx .wd small { display: block; font-size: 13px; line-height: 18px; color: var(--ink-2); }
+.menu .mwx .wd small svg { width: 13px; height: 13px; vertical-align: -2px; }
+.hud > .lcol { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; min-width: 0; pointer-events: none; }   /* coluna esquerda: título */
+.lcol > * { pointer-events: auto; }
+.btns { display: flex; gap: 6px; flex-wrap: nowrap; justify-content: flex-end; align-items: center; flex: none; }
+/* Menu de opções (v1.5): um botão ☰ no topo abre a lista suspensa (pull-down do iOS, 250 pt): marca de verificação à esquerda, ícone à direita,
+   linhas de 44 no toque e 36 com mouse, seções separadas por faixa de 8; nasce do botão e volta para ele */
+.btn:hover { background: var(--raised); }   /* opaco: o fill translúcido mostraria a cena por baixo */
+.menubtn { display: inline-flex; align-items: center; gap: 7px; }
+.menubtn svg { width: 16px; height: 16px; flex: none; }
+.menubtn[aria-expanded="true"] { background: #3a3a3c; color: var(--ink); }
+.menu { position: absolute; right: 10px; top: 56px; z-index: 8; width: min(250px, calc(100% - 20px)); max-height: calc(100% - 66px); overflow: auto; overscroll-behavior: contain; box-sizing: border-box; padding: 0;
+  border-radius: 14px; background: var(--mat-pop); border: 0; backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
+  box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .12), 0 10px 40px rgba(0, 0, 0, .45);
+  transform-origin: top right; animation: menuIn .32s var(--ease); scrollbar-width: thin; scrollbar-color: var(--fill-3) transparent; }
+.menu[hidden] { display: none; }
+@keyframes menuIn { from { opacity: 0; scale: .9; } }   /* sem overshoot: nasce do botão */
+.menu.out, .sel.out { animation: popOut .15s ease-in forwards; pointer-events: none; }   /* sai pelo mesmo caminho: de volta ao botão / à ponta */
+@keyframes popOut { to { opacity: 0; scale: .9; } }
+.menubtn, .menu .mi, .menu .mseg button { transition: transform .1s ease-out, background .15s; }
+.menubtn:active, .menu .mseg button:active { transform: scale(.97); }   /* retorno já no toque */
+.menu .msec { padding: 0; } .menu .msec + .msec { border-top: 8px solid rgba(0, 0, 0, .22); }
+.menu .mh { padding: 10px 16px 4px; font-size: 13px; line-height: 18px; letter-spacing: -.006em; color: var(--ink-2); }
+.menu .mi { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 44px; padding: 11px 16px 11px 12px; border-radius: 0; text-align: left; font-size: 17px; line-height: 22px; font-weight: 400; letter-spacing: -.025em; color: var(--ink); }
+.menu .mi + .mi { box-shadow: inset 0 1px 0 var(--line); }
+.menu .mi::before { content: ""; flex: none; width: 16px; height: 16px; background: currentColor; -webkit-mask: var(--check) center / 16px no-repeat; mask: var(--check) center / 16px no-repeat; visibility: hidden; }   /* o lugar da marca fica reservado */
+.menu .mi[aria-pressed="true"]::before { visibility: visible; }
+.menu .mi svg { order: 2; width: 20px; height: 20px; flex: none; color: var(--ink); }   /* ícone à direita; o estado é a marca */
+.menu .mi .ml { flex: 1; min-width: 0; } .menu .mi .ml small { display: block; font-size: 13px; line-height: 18px; letter-spacing: -.006em; color: var(--ink-2); }
+.menu .mi:hover, .menu .mi[aria-pressed]:hover { background: var(--fill); }
+.menu .mi:active { background: var(--fill-3); }   /* realce da linha, sem encolher */
+.menu .mi[aria-pressed="true"] { background: transparent; color: var(--ink); }
+.menu .mi:disabled { cursor: default; } .menu .mi:disabled:hover { background: transparent; }
+@media (pointer: fine) { .menu .mi { min-height: 36px; padding-block: 8px; font-size: 15px; line-height: 20px; letter-spacing: -.015em; } .menu .mi .ml small { font-size: 12px; line-height: 16px; letter-spacing: 0; } }
+.menu .mseg { display: flex; margin: 4px 16px 10px; }
+.menu .mseg button { flex: 1; }
+button { appearance: none; border: 0; background: transparent; color: var(--ink); font: inherit; font-weight: 600; font-size: 12px;
+  padding: 6px 10px; border-radius: 7px; cursor: pointer; letter-spacing: -.006em; }
+button:hover { background: var(--fill); }
+button:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.hud .btn:focus-visible, .reopen:focus-visible, .pegdica button:focus-visible { box-shadow: 0 0 0 2px #000; }   /* sobre a cena: anel duplo (o azul encosta no preto, 7,4:1) */
+button[aria-pressed="true"] { background: var(--on-bg); color: var(--on); }
+.btn { min-height: 36px; padding: 7px 14px; border-radius: 999px; font-size: 15px; line-height: 20px; letter-spacing: -.015em; }   /* cápsula, como os botões de barra do HIG */
+@media (pointer: coarse) { .btn { min-height: 44px; } }
+.back svg { width: 16px; height: 16px; margin: 0 2px 0 -4px; vertical-align: -3px; }   /* "‹ Planta" / "‹ Casa" */
+.back.compact { min-width: 44px; padding-inline: 0; } .back.compact span { display: none; } .back.compact svg { margin: 0; }   /* sem lugar para o título: só "‹" (o destino fica no aria-label) */
+.wrap::before, .wrap::after { content: ""; position: absolute; left: 0; right: 0; height: 120px; pointer-events: none; }
+.wrap::before { top: 0; background: linear-gradient(rgba(6, 9, 18, .55), transparent); }
+.wrap::after { bottom: 0; background: linear-gradient(transparent, rgba(6, 9, 18, .6)); }
+.err { position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; text-align: center; color: #ffb4b4; background: #0a0f1e; }
+/* Visão de pessoa (v1.4): joystick, aviso de comandos, bonequinho, "Ir para…" */
+.joy { position: absolute; left: 16px; bottom: 16px; width: 116px; height: 116px; border-radius: 50%; z-index: 4; touch-action: none; opacity: .85; cursor: grab;
+  background: radial-gradient(circle, rgba(255, 255, 255, .12), rgba(255, 255, 255, .04)); border: 1px solid rgba(255, 255, 255, .24); backdrop-filter: var(--blur-s); -webkit-backdrop-filter: var(--blur-s); }
+.joy[hidden] { display: none; }
+.joy .knob { position: absolute; left: 50%; top: 50%; width: 52px; height: 52px; margin: -26px 0 0 -26px; border-radius: 50%; pointer-events: none;
+  background: var(--on-line); border: 1px solid var(--on); box-shadow: 0 2px 10px rgba(0, 0, 0, .35); }
+.walkhint { position: absolute; left: 50%; bottom: 150px; transform: translateX(-50%); z-index: 4; padding: 7px 12px; font-size: 12px; color: var(--ink); max-width: calc(100% - 32px);
+  text-align: center; pointer-events: none; opacity: 0; transition: opacity .6s; }
+.walkhint.show { opacity: 1; }
+canvas.walk { cursor: crosshair; }
+canvas.walk.pick { cursor: pointer; }
+/* balão do aparelho tocado (v1.8.1, como na Igreja; popover do iOS na v1.9): nome, estado e a ação; Acender/Ligar âmbar cheio, Apagar/Desligar/Detalhes grafite.
+   A posição vem do _selPlace na propriedade translate: a escala da entrada e da saída nasce da ponta */
+.sel { position: absolute; left: 0; top: 0; z-index: 3; display: flex; align-items: center; gap: 12px; max-width: calc(100% - 16px); box-sizing: border-box; padding: 8px 8px 8px 14px; border-radius: 14px; white-space: nowrap;
+  background: var(--mat-pop); border: 0; backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur); box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .12), 0 10px 28px rgba(0, 0, 0, .45);
+  transform-origin: calc(50% + var(--ax, 0px)) calc(100% + 8px); animation: selIn .3s var(--ease); }   /* sólido fora do vidro: os rótulos da maquete não transparecem */
+.sel.below { transform-origin: calc(50% + var(--ax, 0px)) -8px; }
+@keyframes selIn { from { opacity: 0; scale: .9; } }
+.sel[hidden] { display: none; } .sel > span { min-width: 0; } .sel b, .sel small { overflow: hidden; text-overflow: ellipsis; }   /* texto longo: reticências; o botão fica inteiro */
+.sel::after { content: ""; position: absolute; left: calc(50% + var(--ax, 0px)); bottom: -5.5px; width: 12px; height: 12px; margin-left: -6px; background: var(--mat-pop); transform: rotate(45deg);
+  clip-path: polygon(0 100%, 100% 100%, 100% 0); box-shadow: inset -.5px -.5px 0 rgba(255, 255, 255, .12); }   /* ponta de 17×8: metade de fora de um quadrado girado, com o mesmo fio de 0,5 px do corpo */
+.sel.below::after { top: -5.5px; bottom: auto; clip-path: polygon(0 100%, 0 0, 100% 0); box-shadow: inset .5px .5px 0 rgba(255, 255, 255, .12); }   /* aberto embaixo do ponto: a ponta sobe */
+.sel b { display: block; font-size: 15px; line-height: 20px; font-weight: 600; letter-spacing: -.015em; color: var(--ink); } .sel small { display: block; font-size: 13px; line-height: 18px; color: var(--ink-2); }
+.sel button { flex: none; min-height: 32px; padding: 6px 14px; border-radius: 999px; background: var(--fill-2); color: var(--ink); font-size: 15px; line-height: 20px; letter-spacing: -.015em; transition: transform .1s ease-out, background-color .2s; }
+.sel button:hover { background: var(--fill-3); } .sel button.go { background: var(--on); color: var(--on-ink); }
+.peg { display: inline-flex; align-items: center; justify-content: center; gap: 6px; color: var(--on); touch-action: none; cursor: grab; padding: 8px 10px; }   /* o bonequinho continua âmbar (o mesmo --on) */
+/* dica de primeiro acesso apontando para o bonequinho (some quando ele é usado ou ao fechar) */
+.pegdica { position: absolute; z-index: 7; max-width: 260px; padding: 9px 36px 9px 12px; font-size: 13px; line-height: 18px; color: var(--ink); text-wrap: pretty; }   /* 260: a frase em 13 px cabe numa linha; se quebrar, sem palavra sozinha embaixo */
+.pegdica::before { content: ""; position: absolute; top: -6px; right: var(--ax, 18px); width: 10px; height: 10px; background: inherit; transform: rotate(45deg); }
+.pegdica button { position: absolute; top: -2px; right: -2px; padding: 10px 12px; font-size: 14px; color: var(--ink-2); }
+.pegdica.lado { transform: translateY(-50%); }   /* desktop: à esquerda dos botões, apontando para eles (não cobre o painel) */
+.pegdica.lado::before { top: 50%; right: -6px; margin-top: -5px; }
+.wrap.side .pegdica:not(.lado) { display: none; }   /* celular com a folha aberta: ela cobriria a faixa da cena */
+.peg[hidden], .btns > button[hidden] { display: none; }
+.peg[aria-pressed="true"] { background: var(--on-bg); }
+.pegghost { position: absolute; left: 0; top: 0; width: 44px; height: 44px; z-index: 7; pointer-events: none; display: grid; place-items: center; color: var(--on);
+  filter: drop-shadow(0 3px 6px rgba(0, 0, 0, .55)); opacity: .85; }
+.pegghost svg { width: 40px; height: 40px; } .pegghost.ok { opacity: 1; } .pegghost[hidden] { display: none; }
+.pegtip { position: absolute; left: 0; top: 0; z-index: 7; pointer-events: none; padding: 5px 9px; font-size: 12px; font-weight: 600; color: var(--on); white-space: nowrap; }
+.pegtip[hidden] { display: none; }
+.goto { position: absolute; right: 10px; top: var(--side-top, 58px); z-index: 6; width: min(340px, calc(100% - 20px)); max-height: calc(100% - 150px); overflow: auto; padding: 8px 10px 10px; overscroll-behavior: contain; box-sizing: border-box; }
+.goto, .pegdica { background: var(--mat-pop); backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur); }
+.goto[hidden] { display: none; }
+.wrap.side .goto { width: min(340px, calc(100% - var(--side-w, 340px) - 30px)); }   /* coluna aberta à esquerda: a lista fica à direita, sem cruzar */
+.goto .gh { font-size: 13px; line-height: 18px; color: var(--ink-2); padding: 2px 2px 6px; }
+.goto .gt { font-size: 13px; color: var(--ink-2); font-weight: 600; margin: 10px 2px 6px; }
+.goto .grow { display: flex; flex-wrap: wrap; gap: 6px; }
+.goto .grow button { background: var(--fill-2); border-radius: 999px; padding: 7px 14px; font-size: 15px; line-height: 20px; }
+.goto .grow button:hover { background: var(--fill-3); color: var(--ink); }
+.fade { position: absolute; inset: 0; background: #06090f; opacity: 0; pointer-events: none; z-index: 5; }
+@media (max-width: 640px) { .peg { padding: 9px 11px; min-width: 44px; min-height: 44px; } .goto, .wrap.side .goto { top: auto; bottom: 138px; right: 10px; left: 10px; width: auto; max-height: 50%; } }
+@media (max-width: 640px) { .joy { width: 104px; height: 104px; left: 14px; bottom: 14px; } .walkhint { bottom: 130px; } }
+/* Painel lateral (v1.5) — coluna grafite à esquerda (barra lateral flutuante do iPadOS); âmbar só no que está ligado (tokens no :host).
+   --side-w / --side-top vêm do _layoutHud (largura da coluna e topo logo abaixo do título, ou dos botões se eles invadirem a faixa) */
+.dock { position: absolute; top: var(--side-top, 58px); left: 10px; bottom: auto; max-height: calc(100% - var(--side-top, 58px) - 10px); width: var(--side-w, 340px); box-sizing: border-box; display: flex; flex-direction: column; overflow: hidden; z-index: 4; touch-action: pan-y;
+  border-radius: 28px; border: 0; background: var(--glass); backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);   /* raio 28: concêntrico com o bloco (18 + 12 de margem) */
+  box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .1), 0 8px 40px rgba(0, 0, 0, .38);
+  animation: dockIn .3s var(--ease) backwards; }
+.dock[hidden] { display: none; }
+.dock.closing { animation: dockOut .2s ease-in forwards; pointer-events: none; }
+@keyframes dockIn { from { opacity: 0; transform: translateX(-32px); } }
+@keyframes dockOut { to { opacity: 0; transform: translateX(calc(-100% - 16px)); } }   /* sai pelo mesmo lado por onde entrou */
+.grab { display: none; }   /* alça da folha (só na folha de baixo) */
+.dshadow { display: none; }   /* sombra da folha flutuante (só no tablet em pé) */
+@keyframes paneIn { from { opacity: 0; } }   /* troca de aba: só esmaece */
+@keyframes sheetIn { from { opacity: 0; transform: translateY(14px); } }
+@keyframes flashPulse { 0% { box-shadow: 0 0 0 0 rgba(255,255,255,.75); } 100% { box-shadow: 0 0 0 14px transparent; } }
+/* cabeçalho da coluna: cápsula do que está ligado (como "Luzes · 4 acesas" do Home) + recolher; abaixo, as abas em segmento de largura igual */
+.phead { display: flex; align-items: center; gap: 8px; padding: 12px; flex: none; }
+.phead .spacer { flex: 1; }
+.phead .count { display: inline-flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; text-overflow: ellipsis; padding: 6px 12px 6px 10px; border-radius: 999px; background: var(--fill); color: var(--ink-2); font-size: 13px; line-height: 18px; font-weight: 400; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.phead .count svg { width: 14px; height: 14px; color: var(--off); transition: color .2s; }
+.phead .count.lit svg { color: var(--on); }   /* a lâmpada acende; sem brilho */
+.phead .count b { color: var(--ink); font-weight: 600; }
+.phead .count:not(.lit):not(.any) { color: var(--ink-3); }   /* "Tudo desligado" em cinza */
+.phead .count:hover { background: var(--fill-2); }
+.phead .sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }   /* só leitor de tela */
+.phead .collapse { position: relative; width: 30px; height: 30px; padding: 0; display: grid; place-items: center; border-radius: 50%; background: var(--fill); color: var(--ink-2); flex: none; }
+.phead .collapse:hover { background: var(--fill-2); color: var(--ink); }
+/* UISegmentedControl (abas, Ligados/Todos, modo do ar, "desligar em", Auto/Dia/Noite): trilho raio 9, polegar #636366 raio 7 com 2 px de folga, 13 pt.
+   O escolhido em semibold, com um fio claro (3,4:1 contra o trilho: a cor sozinha não chega a 3:1) */
+.tabs, .zonebar, .seg2, .menu .mseg { gap: 0; padding: 2px; border: 0; border-radius: 9px; background: var(--fill); }
+.tabs button[role="tab"], .zonebar button, .seg2 button, .menu .mseg button { min-height: 28px; padding: 4px 10px; border-radius: 7px; font-size: 13px; line-height: 20px; font-weight: 500; letter-spacing: -.006em; color: var(--ink); transition: background-color .2s, box-shadow .2s; }
+.tabs button[aria-selected="true"], .zonebar button[aria-pressed="true"], .seg2 button[aria-pressed="true"], .menu .mseg button[aria-pressed="true"] {
+  background: var(--seg); color: var(--ink); font-weight: 600; box-shadow: inset 0 0 0 1px var(--seg-line), 0 3px 8px rgba(0, 0, 0, .12), 0 3px 1px rgba(0, 0, 0, .04); }
+.tabs { display: flex; margin: 0 12px 12px; flex: none; }
+.tabs button[role="tab"] { flex: 1; min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding-inline: 4px; }
+.tabs button[role="tab"] span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tabs button[role="tab"] svg { display: none; }   /* coluna estreita (v1.6): só o texto */
+.pane { flex: 0 1 auto; min-height: 0; overflow: auto; padding: 12px 12px 14px; display: none; touch-action: pan-y; overscroll-behavior: contain;
+  -webkit-mask-image: linear-gradient(transparent, #000 12px); mask-image: linear-gradient(transparent, #000 12px);   /* degradê na borda de cima em vez de linha de 1 px */ scrollbar-width: thin; scrollbar-color: var(--fill-3) transparent; }
+.pane.active { display: block; animation: paneIn .2s var(--ease); }
+.pane.top { -webkit-mask-image: none; mask-image: none; }   /* degradê só depois de rolar: sem camada de máscara parada */
+/* Ligados · Todos: filtro compacto à esquerda, segmentos de largura igual, com selo âmbar (a planta é o filtro por cômodo) */
+.zonebar { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; width: max-content; max-width: 100%; box-sizing: border-box; margin: 0 0 16px; }
+.zonebar button { position: relative; min-width: 84px; font-variant-numeric: tabular-nums; }
+.zonebar .n { display: inline-block; min-width: 20px; height: 20px; margin-left: 6px; padding: 0 6px; box-sizing: border-box; border-radius: 10px; background: var(--on); color: var(--on-ink); font-size: 12px; font-weight: 600; line-height: 20px; vertical-align: 1px; }   /* selo: quantos estão ligados */
+.zempty { margin: 0 0 8px; padding: 12px; border-radius: 12px; background: var(--raised); font-size: 15px; line-height: 20px; color: var(--ink-2); } .zempty[hidden] { display: none; }
+.zempty button { padding: 6px 4px; color: var(--ink); font-size: inherit; text-decoration: underline; text-underline-offset: 3px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fill, minmax(124px, 1fr)); gap: 8px; }   /* 2 colunas na coluna de 320 px; 1 quando estreita */
+/* cômodo como no Home: "Quarto ›" em 17 semibold, contagem em 13 cinza, sem fio */
+.zone { grid-column: 1 / -1; display: flex; align-items: center; gap: 10px; margin: 24px 2px 0; font-size: 17px; line-height: 22px; font-weight: 600; letter-spacing: -.025em; color: var(--ink); }
+.zone:first-child { margin-top: 0; }
+.zone::after { content: ""; order: 2; flex: 1; }
+.zone button { display: inline-flex; align-items: center; gap: 4px; padding: 0; font: inherit; letter-spacing: inherit; color: inherit; }
+.zone button i { display: inline-grid; color: var(--ink-2); } .zone button i svg { width: 14px; height: 14px; }   /* "›": leva ao cômodo */
+.zone button:not(:disabled):hover, .zone button:not(:disabled):hover i { color: var(--ink); } .zone button:disabled { cursor: default; }
+.zone .zn { order: 3; font-weight: 400; font-size: 13px; letter-spacing: -.006em; color: var(--ink-2); font-variant-numeric: tabular-nums; }   /* contagem em texto: neutra */
+.zone[hidden], .tile[hidden], .blk[hidden], .foot[hidden], .sect[hidden] { display: none; }
+/* bloco (v1.8.1): Casa · Área externa — numa linha, nome, "N de M ligados" e o interruptor de tudo dele (v1.9); os cômodos dele embaixo */
+.blk { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; margin: 0 2px; color: var(--ink); }
+:not([hidden]) ~ .blk { margin-top: 32px; } .blk + .zone { margin-top: 12px; }   /* vão só entre blocos à vista */
+.blk .bt { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 8px; }
+.blk b { font-size: 20px; line-height: 25px; font-weight: 700; letter-spacing: -.02em; } .blk small { flex-basis: 100%; white-space: nowrap; font-size: 13px; line-height: 18px; letter-spacing: -.006em; color: var(--ink-2); font-variant-numeric: tabular-nums; }   /* contagem sempre embaixo do nome: os blocos ficam iguais */
+.foot { grid-column: 1 / -1; height: 1px; margin: 20px 2px 4px; background: var(--line); }   /* Sandro, no fim: um fio, não um 3º bloco */
+.autos > .sect:not(:first-child) { margin-top: 24px; } .autos > .sect + .zone { margin-top: 4px; } .autos .zone { margin-bottom: 8px; } .sect[hidden] + .autos { margin-top: 24px; }   /* Automações · bloco → cômodo */
+.tile.wide { grid-column: 1 / -1; } .dock.room .tile.wide { grid-column: auto; } .tile small .sv { font-weight: 400; }   /* aparelho de mais de um cômodo: linha inteira, cabe o "também …" */
+/* bloco do Home (ícone num círculo à esquerda, nome e estado à direita, sem borda): desligado grafite; ligado claro com o círculo âmbar; sensor nunca acende */
+.tile { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; column-gap: 8px; min-height: 64px; padding: 12px 8px 12px 12px; border-radius: 18px; text-align: left; color: var(--ink);
+  background: var(--raised); border: 0;
+  transition: background-color .2s, transform .14s var(--ease); }
+.tile > * { position: relative; }
+.tile:hover { background: #363638; }
+.tile:active { transform: scale(.97); }
+.tile:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.tile .top { display: contents; }
+.tile > span:not(.top) { min-width: 0; }
+.tile .eyebrow { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }   /* cômodo: só leitor de tela (o nome é curto) */
+.tile .ico { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; background: var(--fill); color: var(--ink-2); transition: background-color .2s, color .2s; }
+.tile .ico svg { width: 20px; height: 20px; }
+svg .f, :is(.on, .lit) svg .r { display: none; } :is(.on, .lit) svg .f { display: inline; }   /* Phosphor: desligado = regular, ligado = fill (só CSS, sem refazer o bloco) */
+.tile b { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; text-overflow: ellipsis; overflow-wrap: anywhere; font-size: 15px; line-height: 20px; font-weight: 600; letter-spacing: -.015em; color: var(--ink); }   /* até 2 linhas, como no Home; palavra maior que a linha quebra ("Iluminânc|ia"), não some cortada */
+.tile small { display: block; font-size: 13px; line-height: 18px; font-weight: 400; letter-spacing: -.006em; color: var(--ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tile small .st { color: var(--ink-2); }
+.tile small .tm, .tile small .sep { display: none; }   /* o horário fica na aba Atividade */
+.tile.on:not([data-kind="sensor"]) { background: var(--tile-on); }   /* ligado: claro (depois do :hover) */
+.tile.on:not([data-kind="sensor"]):hover { background: #f2f2f7; }
+.tile.on:not([data-kind="sensor"]) b { color: var(--tile-on-ink); }
+.tile.on:not([data-kind="sensor"]) small, .tile.on:not([data-kind="sensor"]) small .st { color: var(--tile-on-ink-2); }
+.tile.on .ico { background: var(--on); color: var(--on-ink); }   /* desenho cheio no círculo âmbar, sem halo */
+.tile[data-kind="sensor"].on { background: var(--raised); } .tile[data-kind="sensor"].on .ico { background: var(--fill-2); color: var(--ink-2); }   /* sensor é só leitura: nunca acende */
+.tile[data-kind="sensor"] small { white-space: normal; } .tile[data-kind="sensor"] small .st { color: var(--ink); }   /* leitura: pode quebrar a linha */
+.tile.unavailable:hover { background: #323234; }   /* o vermelho continua com 4,5:1 */ .tile.unavailable b { color: var(--ink-2); } .tile.unavailable .ico { color: var(--ink-3); } .tile.unavailable small .st { color: var(--alert); }   /* sem opacidade nem filtro: continua legível */
+.tile.flash { box-shadow: 0 0 0 3px rgba(255,255,255,.75); }   /* "olha aqui" em branco (sem azul de seleção) */
+.tile .more { position: absolute; top: 4px; right: 4px; z-index: 1; width: 26px; height: 26px; padding: 0; display: grid; place-items: center; border-radius: 50%; background: transparent; color: var(--ink-2); cursor: pointer; opacity: 0; transition: background-color .2s, opacity .2s; }   /* z-index: por cima do nome, que senão pega o toque */
+.tile .more svg { width: 16px; height: 16px; }
+.tile:hover .more, .tile:focus-within .more { opacity: 1; } @media (hover: none) { .tile .more { opacity: 1; } }   /* "⋯" só aparece quando serve (no toque, sempre) */
+.tile .more:hover, .tile .more:focus-visible { background: var(--fill-2); color: var(--ink); opacity: 1; }
+.tile.on .more { color: var(--tile-on-ink-2); } .tile.on .more:hover, .tile.on .more:focus-visible { background: rgba(60, 60, 67, .14); color: #000; }
+.tile .more:focus-visible { outline: 3px solid var(--focus); outline-offset: -3px; } .tile.on .more:focus-visible { outline-color: #0040dd; }   /* por dentro do círculo (o bloco recorta); no bloco claro, o azul escuro do iOS (6:1) */
+.tile .more::after { content: ""; position: absolute; inset: -4px; }   /* área de toque maior */
+.tile[data-kind]:not([data-kind="sensor"]):is(:hover, :focus-within) b { padding-right: 22px; } @media (hover: none) { .tile[data-kind]:not([data-kind="sensor"]) b { padding-right: 22px; } }   /* onde o "⋯" aparece, o nome acaba antes dele (reticências), não embaixo */
+.tiles.routines { grid-template-columns: minmax(0, 1fr); }
+.tile.routine .ico { background: var(--fill); color: var(--ink-2); }
+.tile.routine small, .tile.wide small { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; white-space: normal; }   /* descrição e o "também …" em até 2 linhas (o .tile small é de 1) */
+/* folha de controles do aparelho: cartão #2c2c2e colado no fim da área rolável */
+.detail { grid-column: 1 / -1; position: sticky; bottom: 4px; z-index: 4; box-sizing: border-box; display: flex; flex-direction: column; gap: 16px; padding: 16px; border-radius: 18px; margin-top: 4px;
+  background: var(--raised); box-shadow: 0 -8px 32px rgba(0, 0, 0, .4); animation: sheetIn .28s var(--ease); }
+.detail[hidden] { display: none; }
+.detail .dhead { display: flex; align-items: center; gap: 12px; }
+.detail .dbody { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px; }
+.detail .dtitle { display: flex; align-items: center; gap: 10px; margin-right: auto; min-width: 0; }
+.detail .dtitle .ico { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; color: var(--ink-2); background: var(--fill); flex: none; transition: background-color .2s, color .2s; }
+.detail.on .dtitle .ico { background: var(--on); color: var(--on-ink); }   /* o mesmo ícone aceso do bloco */
+.detail .dtitle .ico svg { width: 20px; height: 20px; }
+.detail .dtitle b { font-size: 17px; line-height: 22px; font-weight: 600; letter-spacing: -.025em; } .detail .dtitle small { color: var(--ink-2); font-size: 13px; line-height: 18px; display: block; }
+.detail .close { position: relative; width: 30px; height: 30px; padding: 0; display: grid; place-items: center; border-radius: 50%; background: var(--fill-2); color: var(--ink-2); } .detail .close svg { width: 13px; height: 13px; }
+/* UISwitch 51×31 (luz, ar, automação e o "tudo" do bloco e do cômodo): polegar 27 branco com a sombra do iOS; ligado em âmbar; estica sob o dedo */
+.sw, .sw:hover { position: relative; flex: none; width: 51px; height: 31px; padding: 0; border-radius: 999px; background: var(--fill-3); transition: background-color .25s var(--ease); }
+.sw::after { content: ""; position: absolute; top: 2px; left: 2px; width: 27px; height: 27px; border-radius: 14px; background: #fff; box-shadow: 0 3px 8px rgba(0, 0, 0, .15), 0 3px 1px rgba(0, 0, 0, .06); transition: transform .3s var(--ease), width .2s var(--ease); }
+.sw[aria-checked="true"] { background: var(--on); } .sw[aria-checked="true"]::after { transform: translateX(20px); }
+.sw:active::after { width: 34px; } .sw[aria-checked="true"]:active::after { transform: translateX(13px); }
+.sw.still, .sw.still::after { transition: none; }   /* 1º desenho: já na posição, sem deslizar */
+.sw:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
+.swl { flex: none; font-size: 13px; line-height: 18px; letter-spacing: -.006em; color: var(--ink-2); } .swl[hidden] { display: none; }   /* "Tudo" à vista: o interruptor do grupo não se confunde com o de uma automação */
+.seg2 { display: inline-flex; }
+.timerseg .tlab { display: inline-flex; align-items: center; gap: 5px; padding: 0 8px 0 6px; font-size: 13px; color: var(--ink-2); }
+.step { display: inline-flex; align-items: center; gap: 6px; padding: 2px; border-radius: 999px; background: var(--fill); }
+.step button { position: relative; width: 40px; height: 32px; padding: 0; border-radius: 999px; background: transparent; color: var(--ink); font-size: 22px; font-weight: 400; line-height: 1; }
+.step button:hover { background: var(--fill-2); color: var(--ink); }
+.step output { min-width: 50px; text-align: center; font-variant-numeric: tabular-nums; font-weight: 600; font-size: 17px; letter-spacing: -.01em; color: var(--ink); }
+.mbtn { position: relative; width: 36px; height: 32px; padding: 0; border-radius: 999px; background: var(--fill-2); display: inline-grid; place-items: center; font-size: 16px; }
+.mbtn:hover { background: var(--fill-3); }
+input[type="range"] { flex: 1; min-width: 110px; }
+.detail .rng { flex: 1 1 200px; min-width: 150px; display: flex; align-items: center; gap: 10px; }
+.detail .rng output { min-width: 40px; text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; font-size: 15px; color: var(--ink); }
+/* slider grosso do Controle Central: trilho de 36 px, preenchimento branco, sem polegar (a borda do preenchimento é o valor) */
+.detail input[type="range"] { -webkit-appearance: none; appearance: none; flex: 1; min-width: 0; height: 36px; margin: 0; background: transparent; cursor: pointer; --v: 100%; --c: #fff; }
+.detail input[type="range"]::-webkit-slider-runnable-track { height: 36px; border-radius: 12px; background: linear-gradient(90deg, var(--c) var(--v), var(--fill-3) var(--v)); }
+.detail input[type="range"]::-webkit-slider-thumb { -webkit-appearance: none; width: 0; height: 36px; margin-top: 0; border: 0; background: transparent; box-shadow: none; }
+.detail input[type="range"]::-moz-range-track { height: 36px; border-radius: 12px; background: var(--fill-3); }
+.detail input[type="range"]::-moz-range-progress { height: 36px; border-radius: 12px; background: var(--c); }
+.detail input[type="range"]::-moz-range-thumb { width: 0; height: 36px; border: 0; background: transparent; box-shadow: none; }
+.detail input[type="range"]:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; border-radius: 14px; }
+.swatches { display: flex; gap: 8px; } .swatch { position: relative; width: 26px; height: 26px; border-radius: 50%; padding: 0; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .2); transition: transform .15s; }
+.swatch:hover { transform: scale(1.15); }
+/* rótulo de seção (lista agrupada do iOS): a única caixa alta do painel; a nota desce para uma linha própria */
+.sect { margin: 0 12px 6px; display: flex; flex-wrap: wrap; align-items: center; gap: 0 8px; font-size: 13px; line-height: 18px; font-weight: 400; letter-spacing: -.006em; text-transform: uppercase; color: var(--ink-2); }
+.sect small { flex-basis: 100%; text-transform: none; font-size: 13px; line-height: 18px; color: var(--ink-2); }
+.tiles + .sect { margin-top: 24px; }
+/* listas agrupadas (Automações, Atividade e as automações do cômodo): cada sequência de linhas é um cartão #2c2c2e de raio 12, linhas de 44+ com fio inset */
+.autos { display: grid; grid-template-columns: minmax(0, 1fr); }
+.auto { position: relative; display: grid; grid-template-columns: 30px minmax(0, 1fr) auto auto; align-items: center; gap: 10px; min-height: 44px; box-sizing: border-box; padding: 10px 12px; background: var(--raised); transition: background-color .2s; }
+.autos > .auto:first-child, .autos > :not(.auto) + .auto { border-radius: 12px 12px 0 0; }
+.autos > .auto:last-child, .autos > .auto:has(+ :not(.auto)) { border-bottom-left-radius: 12px; border-bottom-right-radius: 12px; }   /* sem :has, só os cantos de baixo ficam retos */
+.auto + .auto::before, .feed li + li::before { content: ""; position: absolute; top: 0; right: 0; left: 52px; border-top: 1px solid var(--line); }
+.auto:hover { background: #363638; }
+.auto .ico { width: 30px; height: 30px; border-radius: 7px; display: grid; place-items: center; background: var(--fill-2); color: var(--ink-2); transition: background-color .2s, color .2s; }   /* ícone de Ajustes: quadrado arredondado */
+.auto.on .ico { background: var(--on); color: var(--on-ink); }   /* automação ativa: âmbar */
+.auto b { display: block; font-size: 15px; line-height: 20px; font-weight: 400; letter-spacing: -.015em; color: var(--ink); } .auto small { display: block; color: var(--ink-2); font-size: 13px; line-height: 18px; letter-spacing: -.006em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }   /* legenda numa linha, como no Casa */
+.auto.off b { color: var(--ink-2); }
+.auto.flash { animation: flashPulse .7s var(--ease); }
+.auto .run { position: relative; width: 30px; height: 30px; padding: 0; border-radius: 50%; background: var(--fill); display: inline-grid; place-items: center; transition: background-color .2s; }
+.auto .run:hover { background: var(--fill-3); }
+.autos .empty { color: var(--ink-2); font-size: 15px; padding: 12px; border-radius: 12px; background: var(--raised); grid-column: 1 / -1; }
+.feed { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: minmax(0, 1fr); border-radius: 12px; background: var(--raised); overflow: hidden; }
+.feed li { position: relative; display: grid; grid-template-columns: 28px 1fr auto; gap: 11px; align-items: center; min-height: 44px; box-sizing: border-box; padding: 10px 12px; font-size: 15px; line-height: 20px; letter-spacing: -.015em; }
+.feed .d { width: 28px; height: 28px; border-radius: 7px; display: grid; place-items: center; background: var(--fill); color: var(--ink-2); }
+.feed .d svg { width: 15px; height: 15px; }
+.feed li.on .d { background: var(--on); color: var(--on-ink); }   /* o que acendeu, ligou ou começou a tocar */
+.feed b { font-weight: 600; color: var(--ink); } .feed time { color: var(--ink-2); font-variant-numeric: tabular-nums; font-size: 13px; text-align: right; white-space: nowrap; }
+.feed .empty { color: var(--ink-2); padding: 14px 12px; font-size: 15px; grid-column: 1 / -1; display: block; }
+@media (min-resolution: 2dppx) { .auto + .auto::before, .feed li + li::before { border-top-width: .5px; } .menu .mi + .mi { box-shadow: inset 0 .5px 0 var(--line); } }   /* fio de 0,5 pt, como na Apple */
+:is(.auto .ico, .feed .d, .phead .count, .menubtn, .tlab, .rfoot .enter) svg path:not(.f) { stroke: currentColor; stroke-width: 8; stroke-linejoin: round; }   /* desenhos de até 16 px: o traço do Phosphor (16/256 ≈ 0,9 px) engrossa até o do bold */
+/* aba de reabrir presa à borda esquerda, na altura do topo da coluna: seta, "Painel" na vertical e o nº de luzes acesas */
+.reopen { position: absolute; left: 0; top: var(--side-top, 58px); display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px 8px 12px 7px; z-index: 3;
+  border-radius: 0 14px 14px 0; font-size: 13px; color: var(--ink); letter-spacing: .04em;
+  background: var(--glass); backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur); box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .12), 0 8px 30px rgba(0, 0, 0, .4); animation: reopenIn .3s var(--ease) backwards; }
+.reopen .rl { writing-mode: vertical-rl; line-height: 1; }
+.reopen svg { width: 14px; height: 14px; color: var(--ink-2); }
+.reopen svg, .phead .collapse svg { transform: scaleX(-1); }   /* setas espelhadas: o painel mora à esquerda (na folha giram 90°) */
+@keyframes reopenIn { from { opacity: 0; transform: translateX(-14px); } }
+.reopen:hover { background: var(--raised); }
+.reopen .rn { min-width: 18px; height: 18px; padding: 0 5px; box-sizing: border-box; border-radius: 9px; background: var(--on); color: var(--on-ink); font-size: 12px; font-weight: 600; line-height: 18px; text-align: center; font-variant-numeric: tabular-nums; letter-spacing: 0; }
+.reopen .rn:empty { display: none; }
+.reopen[hidden] { display: none; }
+/* cômodo tocado (v1.6.1): o painel lateral focado nele — no lugar das abas e do filtro, "‹ Todos os cômodos", nome, "N de M ligados" e
+   o interruptor de tudo do cômodo (v1.9); embaixo dos blocos, as automações do cômodo e "Entrar aqui" */
+.rhead { flex: none; margin: 0 12px 10px; }
+.dock:not(.room) .rhead, .dock:not(.room) .rfoot, .dock.room .tabs, .dock.room .zonebar, .dock.room .zone, .dock.room .blk, .dock.room .foot, .dock.room .tile .sv { display: none; }
+.dock.room .rhead { display: flex; align-items: center; gap: 8px; }   /* [‹] [nome + N de M] [interruptor] */
+.rhead .rback { flex: none; width: 32px; height: 32px; margin-left: -8px; padding: 0; display: grid; place-items: center; border-radius: 50%; color: var(--ink); } .rhead .rback svg { width: 20px; height: 20px; }
+.rhead .rback:hover { background: var(--fill-2); }
+.rhead .rtitle { flex: 1; min-width: 0; } .rhead .rtitle b { display: block; font-size: 20px; line-height: 25px; font-weight: 700; letter-spacing: -.02em; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rhead .rtitle small { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; color: var(--ink-2); font-size: 13px; line-height: 18px; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; }   /* até 2 linhas: com o rótulo «Tudo» ao lado, a leitura dos sensores não some (a espiada mede a linha real) */
+.wrap:not(.sheet) .rhead .rtitle b, .wrap:not(.sheet) .rhead .rtitle small { white-space: normal; }   /* coluna: o nome e a leitura dos sensores quebram a linha em vez de sumir (na folha, a 1ª linha é a espiada) */
+.rfoot { margin-top: 24px; } .rfoot .autos { margin-bottom: 12px; }
+.rfoot .enter { display: flex; align-items: center; justify-content: center; gap: 7px; width: 100%; min-height: 44px; padding: 8px 14px; border-radius: 999px; background: var(--fill-2); color: var(--ink); font-size: 15px; line-height: 20px; letter-spacing: -.015em; transition: transform .1s ease-out, background-color .2s; }
+.rfoot .enter:hover { background: var(--fill-3); }
+.rfoot .enter svg { width: 16px; height: 16px; color: var(--ink); }
+.rfoot .enter:active, .sel button:active { transform: scale(.97); }   /* retorno já no toque */
+/* folha de baixo (celular e tablet em pé, ver _layoutHud): altura do conteúdo e três alturas — espiada, média, cheia — por translateY.
+   Fora da cheia a lista não rola: o dedo em qualquer ponto move a folha; na cheia, puxar com a lista no topo desce a folha */
+.wrap.sheet .dock { top: auto; left: 0; right: 0; bottom: 0; width: auto; max-height: calc(100% - var(--side-top, 58px)); border-radius: 28px 28px 0 0; animation-name: drawerIn; touch-action: none; --sab: env(safe-area-inset-bottom, 0px); }
+.wrap.sheet .dock.closing { animation-name: drawerOut; }
+@keyframes drawerIn { from { transform: translateY(100%); } }
+@keyframes drawerOut { to { transform: translateY(100%); } }
+.wrap.sheet .dock:not([data-snap="full"]) .pane { overflow: clip; touch-action: none; }   /* clip: nem o foco nem o _flashRow rolam a lista escondida */
+.wrap.sheet .dock[data-snap="full"] .pane.top { touch-action: pan-down; }   /* no topo: subir rola a lista, descer é da folha */
+.wrap.sheet .grab { display: block; position: absolute; left: 50%; top: 0; width: 64px; height: 22px; margin-left: -32px; padding: 0; z-index: 1; background: none; }
+.wrap.sheet .grab::before { content: ""; position: absolute; left: 14px; right: 14px; top: 5px; height: 5px; border-radius: 2.5px; background: rgba(235, 235, 245, .4); }   /* alça 36×5 do iOS (3,2:1) */
+.wrap.sheet .grab::after { content: ""; position: absolute; inset: 0 0 -22px; }   /* alvo de 44 px */
+.wrap.sheet .phead .collapse svg { transform: rotate(90deg); }
+.wrap.sheet .dock.room .phead { display: none; } .wrap.sheet .dock.room .rhead { margin-top: 16px; }   /* no cômodo a 1ª linha é a dele */
+.wrap.sheet .reopen { top: auto; bottom: 0; left: 50%; right: auto; transform: translateX(-50%); flex-direction: row; padding: 9px 14px calc(9px + env(safe-area-inset-bottom)); border-radius: 14px 14px 0 0; animation-name: fadeIn; }
+.wrap.sheet .reopen .rl { writing-mode: horizontal-tb; } .wrap.sheet .reopen svg { transform: rotate(90deg); }   /* a aba de reabrir fica onde a folha mora: embaixo */
+.wrap.sheet .phead { padding: 16px 16px 8px; } .wrap.sheet .tabs, .wrap.sheet .rhead { margin: 0 16px 12px; } .wrap.sheet .pane { padding: 8px 16px calc(16px + env(safe-area-inset-bottom)); }
+@media (min-width: 641px) {   /* tablet em pé: folha flutuante, blocos em 4 colunas */
+  .wrap.sheet .dock { left: 12px; right: 12px; bottom: 12px; max-height: calc(100% - var(--side-top, 58px) - 12px); border-radius: 28px; --sab: 0px; box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .1); }   /* a sombra fica no .dshadow: o clip-path a cortaria */
+  .wrap.sheet .dock:not([hidden]) + .dshadow { display: block; position: absolute; left: 12px; right: 12px; bottom: 12px; z-index: 3; border-radius: 28px; box-shadow: 0 8px 40px rgba(0, 0, 0, .38); pointer-events: none; animation: drawerIn .3s var(--ease) backwards; }   /* altura do pedaço à vista (_sideX): sombra em qualquer altura, sem acender no fim da mola */
+  .wrap.sheet .dock.closing + .dshadow { animation: drawerOut .2s ease-in forwards; }   /* entra e sai junto com a folha */
+  .wrap.sheet .reopen { bottom: 12px; border-radius: 999px; padding-bottom: 9px; }
+  .wrap.sheet .tiles:not(.routines) { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+/* coluna à esquerda (v1.8): título em cima com a mesma largura; borda direita arrastável (.sizer); o conteúdo segue a largura do painel */
+.lcol .title { box-sizing: border-box; min-width: 0; transition: min-width .2s ease-in; } .wrap.sizing .lcol .title { transition: none; }   /* min-width 0 (auto não anima): fecha junto com o dockOut */
+.wrap.side:not(.sheet) .lcol .title { min-width: var(--side-w, 320px); transition-duration: .3s; transition-timing-function: var(--ease); }   /* título e painel formam uma coluna só; abre junto com o dockIn */
+.wrap.side:not(.sheet) .joy { left: calc(var(--side-w, 320px) + 26px); }
+.wrap.side:not(.sheet) .walkhint { left: calc(50% + var(--side-w, 320px) / 2 + 10px); max-width: calc(100% - var(--side-w, 320px) - 52px); }   /* centrada na faixa livre */
+.wrap:not(.sheet) .dock { overflow: visible; } .wrap:not(.sheet) .pane { border-radius: 0 0 27px 27px; }   /* a alça sai 10 px da borda: o .pane recorta os cantos de baixo */
+.dock { container-type: inline-size; }   /* consultas pela largura do PAINEL (coluna ajustável e folha); sem contain: paint, que cortaria a alça */
+@container (max-width: 300px) { .tabs button[role="tab"] { padding-inline: 3px; font-size: 12px; letter-spacing: 0; } }   /* "Automações" inteira a 272 px */
+@container (max-width: 400px) { .timerseg { display: flex; flex-wrap: wrap; flex: 1 1 100%; } .timerseg .tlab { flex-basis: 100%; padding: 3px 6px 4px; } .timerseg button { flex: 1 1 auto; padding-inline: 4px; white-space: nowrap; } }   /* "desligar em" em cima, os 4 tempos embaixo */
+.sizer { position: absolute; top: 0; bottom: 0; right: -10px; width: 12px; z-index: 2; cursor: col-resize; touch-action: none; outline: none; }
+.sizer::after { content: ""; position: absolute; top: 50%; left: .5px; width: 4px; height: 36px; margin-top: -18px; border-radius: 2px; background: var(--ink-3); box-shadow: 0 0 0 1px rgba(0, 0, 0, .35); opacity: 0; transition: opacity .15s, background-color .15s; }   /* a mesma pílula da alça da folha: neutra (não é estado nem valor da casa) */
+@media (hover: hover) { .dock:hover .sizer::after { opacity: .7; } .dock .sizer:hover::after { opacity: 1; background: var(--ink-2); } }
+@media (hover: none) { .sizer::after { opacity: .7; } }
+.wrap.sizing .sizer::after { opacity: 1; background: var(--ink-2); }
+.dock .sizer:focus-visible::after { opacity: 1; background: var(--ink-2); box-shadow: 0 0 0 2px var(--focus); }   /* .dock: acima do .dock:hover (0,3,1) */
+.sizer[data-edge="min"] { cursor: e-resize; } .sizer[data-edge="max"] { cursor: w-resize; }
+.wrap.sizing, .wrap.sizing * { cursor: col-resize !important; user-select: none; -webkit-user-select: none; }
+.wrap.sheet .sizer { display: none; }
+@media (pointer: coarse) { .sizer { width: 44px; right: -36px; } .sizer::after { left: 6.5px; } }   /* toque: alvo de 44 px (8 dentro, 36 fora) */
+@media (prefers-contrast: more) { .wrap .dock .sizer::after { opacity: 1; background: var(--ink); } }   /* acima do hover e do foco: sempre no máximo */
+/* toque: alvos de 44 px sem mudar o desenho */
+@media (pointer: coarse) {
+  .phead .collapse::after { content: ""; position: absolute; inset: -9px -7px -5px; } .phead .count { min-height: 44px; border-block: 4px solid transparent; margin-block: -4px; background-clip: padding-box; } .phead .count:focus-visible { outline-offset: -2px; }   /* círculo de 30 px, alvo de 44 (sobe: embaixo vem o alvo das abas) · cápsula: 36 de desenho, 44 de alvo (a borda transparente conta no toque) */
+  .tabs button[role="tab"], .seg2 button, .menu .mseg button { position: relative; }
+  .tabs button[role="tab"]::after, .zonebar button::after, .seg2 button::after, .menu .mseg button::after { content: ""; position: absolute; inset: -8px 0; }   /* segmentado: 28 de desenho, 44 de alvo */
+  .detail .close::after, .auto .run::after { content: ""; position: absolute; inset: -7px; } .step button::after { content: ""; position: absolute; inset: -6px -2px; } .mbtn::after { content: ""; position: absolute; inset: -6px -4px; }
+  .swatches { gap: 12px; } .swatch { width: 32px; height: 32px; } .swatch::after { content: ""; position: absolute; inset: -6px; }
+  .sw::before { content: ""; position: absolute; inset: -7px 0; }   /* interruptor: 31 de desenho, 45 de alvo */
+  .detail input[type="range"] { height: 44px; }
+  .rhead .rback, .rfoot .enter, .sel button, .goto .grow button { min-height: 44px; } .rhead .rback { width: 44px; }
+  .zone button { min-height: 44px; margin: -12px 0; }
+  .tile .more::after { inset: -10px; }
+}
+@media (max-width: 640px) {
+  .detail .rng { flex-basis: 100%; }
+  /* cabeçalho numa linha: título (encolhe) à esquerda, bonequinho e menu à direita */
+  .hud.top { flex-wrap: nowrap; gap: 8px; }
+  .hud > .lcol { flex: 1 1 auto; }
+  .title { padding: 8px 12px; max-width: 100%; box-sizing: border-box; }
+  .title .clock .per { display: none; }   /* "simulado" (só na demo) não cabe ao lado do "‹ Casa" */
+  .btn { padding: 7px 10px; }
+  .menubtn { min-width: 44px; min-height: 44px; justify-content: center; } .menubtn .lbl, .peg .lbl { display: none; }
+}
+@media (max-width: 340px) { .tile b { font-size: 14px; line-height: 19px; } .title b { font-size: 15px; line-height: 20px; } .title .cline { gap: 8px; } .rhead .swl { display: none; } }   /* celular de 320: nome curto do bloco inteiro ("Bomba" ao lado do ⋯) e "Casa 3D" numa linha ao lado dos três círculos; o nome do cômodo antes do rótulo "Tudo" */
+/* cantos contínuos (Chrome/Edge ≥ 139), raio ~1,4×; só com o vidro: em aparelho fraco, recorte que não é retângulo arredondado pode virar máscara.
+   Os botões são cápsulas (o HIG prefere) e ficam fora */
+@supports (corner-shape: squircle) {
+  .wrap.glass :is(.tile, .detail, .menu, .sel, .panel:not(.dock, .btn), .auto, .autos .empty, .feed, .zempty, .dock, .pane, .dshadow) { corner-shape: squircle; }
+  .wrap.glass .tile, .wrap.glass .detail { border-radius: 26px; }
+  .wrap.glass :is(.menu, .sel, .panel:not(.dock, .btn)) { border-radius: 20px; }
+  .wrap.glass :is(.feed, .zempty, .autos .empty) { border-radius: 17px; }
+  .wrap.glass .autos > :is(.auto:first-child, :not(.auto) + .auto) { border-radius: 17px 17px 0 0; }
+  .wrap.glass .autos > :is(.auto:last-child, .auto:has(+ :not(.auto))) { border-bottom-left-radius: 17px; border-bottom-right-radius: 17px; }
+  .wrap.glass .dock { border-radius: 40px; } .wrap.glass:not(.sheet) .pane { border-radius: 0 0 39px 39px; } .wrap.glass.sheet .dock { border-radius: 40px 40px 0 0; }   /* depois do .panel: a coluna não cai para 20 */
+  .wrap.glass .detail input[type="range"]::-webkit-slider-runnable-track { corner-shape: squircle; border-radius: 17px; }
+  @media (min-width: 641px) { .wrap.glass.sheet .dock, .wrap.glass.sheet .dock:not([hidden]) + .dshadow { border-radius: 40px; } }
+}
+@media (prefers-reduced-motion: reduce) { .lcol .title, .pane.active, .tile, .tile .ico, .detail, .feed li, .auto, .sw, .seg2 button, .swatch, .menubtn, .menu .mi, .menu .mseg button, .rfoot .enter, .sel button { animation: none !important; transition: none !important; transform: none !important; }
+  .sw::after { transition: none !important; }   /* sem o transform: none, o polegar ligado ficava preso à esquerda */
+  .dock, .dshadow, .reopen, .menu, .sel { animation: fadeIn .15s linear !important; }   /* sem deslize nem escala: fade curto (o .sel fica fora da lista de cima: a posição dele é translate) */
+  .menu.out, .sel.out { animation: fadeOut .15s linear forwards !important; } }
+@keyframes fadeIn { from { opacity: 0; } }
+@keyframes fadeOut { to { opacity: 0; } }
+/* ===== Noite: grafite e vidro sutil, serifa itálica de destaque, menu em pílula, cartão de hover ===== */
+.title { padding: 9px 18px 9px 20px; border-radius: 999px; gap: 0; }
+.title b { font-size: 19px; line-height: 24px; font-weight: 500; letter-spacing: -.02em; }
+.title b em, .it { font-family: var(--serif); font-style: italic; font-weight: 400; letter-spacing: 0; font-size: 1.14em; color: #ffd9a8; }
+.title .sub { font-size: 12px; line-height: 16px; letter-spacing: .02em; color: var(--ink-2); }
+.panel { box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .09), 0 6px 24px rgba(0, 0, 0, .35); }
+.btns { padding: 4px; gap: 2px; border-radius: 999px; background: var(--mat-chrome); backdrop-filter: var(--blur-s); -webkit-backdrop-filter: var(--blur-s);
+  box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .1), 0 6px 24px rgba(0, 0, 0, .35); }
+.btns .btn, .btns .panel { background: transparent; box-shadow: none; backdrop-filter: none; -webkit-backdrop-filter: none; }
+.btns .btn:hover { background: rgba(255, 255, 255, .08); }
+.tile.on:not([data-kind="sensor"]) { background: rgba(255, 181, 71, .13); box-shadow: inset 0 0 0 1px rgba(255, 181, 71, .26); }   /* noite: ligado = brilho âmbar discreto, não cartão claro */
+.tile.on:not([data-kind="sensor"]):hover { background: rgba(255, 181, 71, .2); }
+.tile.on:not([data-kind="sensor"]) b { color: #fff; }
+.tile.on:not([data-kind="sensor"]) small, .tile.on:not([data-kind="sensor"]) small .st, .tile.on .more { color: rgba(255, 226, 184, .72); }
+.menu, .sel { border-radius: 20px; box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .1), 0 14px 44px rgba(0, 0, 0, .5); }
+.dock { border-radius: 22px; background: var(--glass); box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .09), 0 12px 48px rgba(0, 0, 0, .5); }
+.tile, .detail, .feed, .auto { border-radius: 16px; }
+.hcard { position: absolute; left: 0; top: 0; z-index: 6; pointer-events: none; display: flex; flex-direction: column; gap: 2px; min-width: 120px; max-width: 220px; padding: 9px 14px 10px;
+  border-radius: 14px; background: rgba(9, 12, 22, .86); box-shadow: inset 0 0 0 .5px rgba(255, 255, 255, .12), 0 10px 30px rgba(0, 0, 0, .55);
+  backdrop-filter: blur(14px) saturate(140%); -webkit-backdrop-filter: blur(14px) saturate(140%);
+  opacity: 0; transform: translate(-50%, calc(-100% - 14px)) scale(.97); transition: opacity .18s ease, transform .18s var(--ease); }
+.hcard.show { opacity: 1; transform: translate(-50%, calc(-100% - 14px)) scale(1); }
+.hcard[hidden] { display: none; }
+.hcard b { font-family: var(--serif); font-style: italic; font-weight: 400; font-size: 19px; line-height: 22px; color: var(--ink); }
+.hcard small { display: flex; align-items: center; gap: 6px; font-size: 12px; line-height: 16px; letter-spacing: .02em; color: var(--ink-2); white-space: nowrap; }
+.hcard small i { width: 6px; height: 6px; border-radius: 50%; background: var(--ink-3); flex: none; }
+.hcard.on small i { background: var(--on); box-shadow: 0 0 8px var(--on); }
+@media (prefers-reduced-motion: reduce) { .hcard { transition: opacity .1s linear; } }
+@media (prefers-reduced-transparency: reduce) { .hcard { background: #0b0f1c; backdrop-filter: none; -webkit-backdrop-filter: none; } .btns { background: #11151f; backdrop-filter: none; -webkit-backdrop-filter: none; } }
+/* menos transparência: o vidro volta a opaco */
+@media (prefers-reduced-transparency: reduce) {
+  .wrap.glass { --glass: var(--glass-solid); --mat-chrome: #1c1c1e; --mat-pop: #2c2c2e; --blur: none; --blur-s: none; --ink-2: rgba(235, 235, 245, .6); --ink-3: rgba(235, 235, 245, .6); }
+}
+/* mais contraste: fundo sólido, linhas e textos mais claros e um contorno definido (sem bordas no visual da v1.9) */
+@media (prefers-contrast: more) {
+  :host { --glass: #0e0e10; --glass-solid: #0e0e10; --raised: #1c1c1f; --fill: rgba(255, 255, 255, .1); --fill-2: rgba(255, 255, 255, .16); --fill-3: rgba(255, 255, 255, .28);
+    --line: rgba(255, 255, 255, .55); --line-2: rgba(255, 255, 255, .8); --ink-2: #dcdce2; --ink-3: #c8c8d0; --on-bg: rgba(255, 181, 71, .24); --on-line: var(--on); --mat-chrome: var(--glass); --mat-pop: var(--raised); }
+  .wrap.glass { --glass: #0e0e10; --mat-chrome: #0e0e10; --mat-pop: #1c1c1f; --ink-2: #dcdce2; --ink-3: #c8c8d0; --blur: none; --blur-s: none; }
+  .panel, .dock, .reopen, .menu, .sel, .detail, .tile, .auto, .feed, .zempty { outline: 1px solid var(--line); outline-offset: -1px; }   /* o :focus-visible vence pela especificidade */
+  .panel, .dock, .menu { backdrop-filter: none; -webkit-backdrop-filter: none; background: var(--glass); }
+  .zonebar button, .tabs button[role="tab"], .seg2 button, .menu .mseg button { border: 1px solid transparent; }
+  .zonebar button[aria-pressed="true"], .tabs button[aria-selected="true"], .seg2 button[aria-pressed="true"], .menu .mseg button[aria-pressed="true"] { border-color: var(--line-2); }
+}
+`;
+
+export class Casa3DCard extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: 'open' });
+    this._config = Object.assign({}, DEFAULT_CONFIG);
+    this._q = this._qualityFor(this._config.quality); this._lite = this._q === 'leve' || this._q === 'min'; this._min = this._q === 'min';
+    this._nightVision = true;
+    this.casa3d = this._maqApi();   // API pública mínima (el.casa3d): rooms() · toggle() · state() · onChange() · camera()
+    this._state = {};          // key -> { on, state, attrs }
+    this._lastChanged = {};    // key -> ISO da última mudança (do HA)
+    this._activity = [];       // histórico: { key, state, ts }
+    this._autos = []; this._autoLast = {};   // automações do HA
+    this._panelOpen = false;
+    this._items = new Map();   // key -> runtime (lights, meshes, chip)
+    this._built = false;
+    this._raf = 0;
+    this._lastSig = '';
+    this._mode = 'night';
+    this._night = true;
+    this._clock = new THREE.Clock(false);
+    this._hoverObj = null;
+    this._nav = { level: 0, block: null, room: null };   // Vista de cima: 0 planta · 1 área · 2 cômodo
+    this._reduced = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    try { this._sideUser = +window.localStorage.getItem('casa3d.painel_w') || 0; } catch (_) { this._sideUser = 0; }   // largura escolhida do painel (0 = automática)
+  }
+
+  // ---- API Lovelace ----
+  static getStubConfig() { return { title: 'Casa 3D' }; }
+  getCardSize() { return 12; }
+  getLayoutOptions() { return { grid_columns: 'full', grid_rows: 8, grid_min_rows: 5 }; }
+
+  setConfig(config) {
+    this._config = Object.assign({}, DEFAULT_CONFIG, config || {});
+    if (!this._built) { this._q = this._qualityFor(this._config.quality); this._lite = this._q === 'leve' || this._q === 'min'; this._min = this._q === 'min'; }   // o nível não muda com a cena montada
+    this._mode = ['auto', 'day', 'night'].includes(this._config.mode) ? this._config.mode : 'night';
+    this._nightVision = this._config.night_vision !== false;
+    this._maq = this._config.look === 'maquete';
+    if (this._config.height) this.style.setProperty('--casa3d-height', String(this._config.height));
+    if (this._built) {
+      setTitle(this._titleEl, this._config.title || 'Casa 3D');
+      this._setLabels(!!this._config.labels);
+      this._applyMode();
+      this._lastSig = ''; if (this._hass) this._syncFromHass();
+    }
+  }
+
+  set hass(hass) {
+    this._hass = hass;
+    if (this._built) this._syncFromHass();
+  }
+  get hass() { return this._hass; }
+
+  entity(key) {
+    const e = this._config.entities || {};
+    return e[key] || DEFAULT_ENTITIES[key];
+  }
+
+  connectedCallback() {
+    if (!this._built) this._build();
+    if (this._built && !this._feedTimer) {   // temporizadores presos à conexão: o cartão tirado da página (editar o dashboard, trocar de vista) não fica vivo
+      this._feedTimer = setInterval(() => { if (this._panelOpen) this._renderPanel(); this._updateTime(true); }, 30000);
+      if (this._weatherUI) { if (!(Date.now() - this._weatherOk < 10 * 60000)) this._fetchWeather(); this._weatherTimer = setInterval(() => this._fetchWeather(), 15 * 60000); }   // de volta à vista: clima em dia (a leitura de menos de 10 min serve)
+    }
+    this._start();
+  }
+  disconnectedCallback() { this._stop(); clearInterval(this._feedTimer); clearInterval(this._weatherTimer); this._feedTimer = this._weatherTimer = 0; if (this._walkOn) this._setWalk(false); this._toggleMenu(false); if (this._szStop) this._szStop(); }   // sai da Pessoa: solta o teclado da página; ajuste da largura no meio: a cena não fica parada
+
+  // ---- Construção do DOM ----
+  _build() {
+    const root = this.shadowRoot;
+    root.innerHTML = '';
+    const style = document.createElement('style'); style.textContent = CSS; root.appendChild(style);
+    const wrap = document.createElement('div'); wrap.className = 'wrap'; root.appendChild(wrap);
+    wrap.classList.toggle('sf', /Macintosh|iPhone|iPad|iPod/.test(navigator.userAgent));   // aparelho Apple: a pilha cai no SF, e o tracking do CSS é o dele
+    wrap.classList.toggle('glass', this._q === 'alta' && Casa3DCard._gpuInfo().glass);   // vidro (backdrop-filter) só no nível alta com GPU conhecida; o governador o tira antes de tudo
+    const canvas = document.createElement('canvas'); canvas.tabIndex = 0; canvas.setAttribute('aria-label', 'Modelo 3D da casa'); wrap.appendChild(canvas);
+    this._canvas = canvas;
+    canvas.addEventListener('selectstart', (e) => e.preventDefault());   // nenhum gesto na cena começa seleção de texto
+    canvas.addEventListener('dblclick', () => { try { const s = window.getSelection(); if (s && s.rangeCount) s.removeAllRanges(); } catch (_) {} });   // e o 2º toque limpa o que escapar (Safari)
+    canvas.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse' && this._mk) { this._hoverDest = null; this._mkHide(); } if (e.pointerType === 'mouse') this._hoverCardHide(); });   // sai do quadro: some o anel do destino
+
+    const top = document.createElement('div'); top.className = 'hud top'; wrap.appendChild(top); this._hudTop = top;
+    const lcol = document.createElement('div'); lcol.className = 'lcol'; top.appendChild(lcol); this._lcol = lcol;   // título (v1.5)
+    const title = document.createElement('div'); title.className = 'panel title'; this._titleCard = title;
+    this._titleEl = document.createElement('b'); setTitle(this._titleEl, this._config.title || 'Casa 3D');
+    this._clockEl = document.createElement('span'); this._clockEl.className = 'clock'; this._clockEl.textContent = '—';
+    this._subEl = document.createElement('span');
+    const cline = document.createElement('div'); cline.className = 'cline'; cline.appendChild(this._titleEl); this._clineEl = cline;   // nome + clima (v1.5.1)
+    const sub = document.createElement('div'); sub.className = 'sub'; sub.append(this._clockEl, this._subEl);   // hora · luzes acesas
+    title.append(cline, sub); lcol.appendChild(title);
+    this._wrap = wrap;
+    const hc = document.createElement('div'); hc.className = 'hcard'; hc.hidden = true; hc.setAttribute('aria-hidden', 'true');   // cartão de hover (noite)
+    this._hcB = document.createElement('b'); this._hcS = document.createElement('small'); hc.append(this._hcB, this._hcS); wrap.appendChild(hc); this._hcard = hc;
+
+    // Topo (v1.5): "Ir para…" (só na Pessoa) + bonequinho + UM botão de menu; as opções ficam na lista suspensa por seções.
+    // As referências (this._modeBtns, _nvBtn, _labelsBtn, _roofBtn, _walkBtn, _panelBtn, _gotoBtn) continuam as mesmas: só mudaram de lugar.
+    const btns = document.createElement('div'); btns.className = 'btns'; top.appendChild(btns); this._btnsEl = btns;
+    const menu = document.createElement('div'); menu.className = 'menu'; menu.id = 'casa3d-menu'; menu.hidden = true;
+    menu.setAttribute('role', 'dialog'); menu.setAttribute('aria-label', 'Opções'); this._menu = menu;
+    const sec = (label) => {
+      const s = document.createElement('div'); s.className = 'msec'; s.setAttribute('role', 'group'); s.setAttribute('aria-label', label);
+      const h = document.createElement('div'); h.className = 'mh'; h.textContent = label; h.setAttribute('aria-hidden', 'true'); s.appendChild(h); menu.appendChild(s); return s;
+    };
+    // item do menu (pull-down do iOS): marca de verificação à esquerda, rótulo (+ nota), ícone à direita; `toggle` = estado no aria-pressed
+    const item = (parent, icon, label, { note, toggle } = {}) => {
+      const b = document.createElement('button'); b.className = 'mi'; b.innerHTML = `${iconSvg(icon)}<span class="ml"></span>`;
+      const ml = b.querySelector('.ml'); ml.textContent = label;
+      if (note) { const sm = document.createElement('small'); sm.textContent = note; ml.appendChild(sm); }
+      if (toggle) b.setAttribute('aria-pressed', 'false');
+      b.dataset.label = label; parent.appendChild(b); return b;
+    };
+    // Ambiente: Auto/Dia/Noite (segmento) + Visão noturna
+    const sAmb = sec('Ambiente');
+    const seg = document.createElement('div'); seg.className = 'mseg'; seg.setAttribute('role', 'group'); seg.setAttribute('aria-label', 'Iluminação ambiente');
+    this._modeBtns = {};
+    for (const [m, lbl] of [['auto', 'Auto'], ['day', 'Dia'], ['night', 'Noite']]) {
+      const b = document.createElement('button'); b.textContent = lbl; b.dataset.mode = m;
+      b.title = m === 'auto' ? 'Segue o sol de verdade' : m === 'day' ? 'Força o dia' : 'Força a noite';
+      b.addEventListener('click', () => { this._mode = m; this._applyMode(); });
+      seg.appendChild(b); this._modeBtns[m] = b;
+    }
+    sAmb.appendChild(seg);
+    this._nvBtn = item(sAmb, 'moon', 'Visão noturna', { note: 'à noite, casa inteira visível', toggle: true });
+    this._nvBtn.addEventListener('click', () => { this._nightVision = !this._nightVision; this._applyMode(); });
+    // Vista: Rótulos, Telhado, Vista de cima, Recentrar
+    const sVis = sec('Vista');
+    this._labelsBtn = item(sVis, 'tag', 'Rótulos', { toggle: true });
+    this._labelsBtn.addEventListener('click', () => this._setLabels(!this._labelsOn));
+    this._roofBtn = item(sVis, 'roof', 'Telhado', { toggle: true });
+    this._roofBtn.addEventListener('click', () => this._setRoof(!this._roofOn));
+    this._topBtn = item(sVis, 'plan', 'Vista de cima', { note: 'planta sem telhado, por cômodo', toggle: true });
+    this._topBtn.addEventListener('click', () => { this._toggleMenu(false); this._setTopView(!this._topView); });
+    const reset = item(sVis, 'target', 'Recentrar'); this._resetBtn = reset;
+    reset.addEventListener('click', () => { this._toggleMenu(false); this._setTopView(true); });   // volta à vista inicial: a planta inteira
+    // Navegação: Pessoa, Ir para…
+    const sNav = sec('Navegação');
+    // Visão de pessoa (v1.4): andar pela casa na altura dos olhos; o bonequinho entra direto num cômodo
+    this._walkBtn = item(sNav, 'walk', 'Pessoa', { note: 'andar na altura dos olhos', toggle: true });
+    this._walkBtn.title = 'Ande pela casa na altura dos olhos: clique no piso, setas/WASD ou joystick; arraste para olhar';
+    this._walkBtn.addEventListener('click', () => { this._toggleMenu(false); this._setWalk(!this._walkOn); });   // muda o modo: o menu sai da frente
+    this._gotoMi = item(sNav, 'pin', 'Ir para…', { note: 'lista de cômodos' });
+    this._gotoMi.addEventListener('click', () => { this._toggleMenu(false); this._toggleGoto(true); });
+    // Painel: mostrar/ocultar a coluna (ou a folha de baixo)
+    const sPan = sec('Painel');
+    this._panelBtn = item(sPan, 'panel', 'Painel', { note: 'cômodos, automações, atividade', toggle: true });
+    this._panelBtn.addEventListener('click', () => { this._toggleMenu(false); this._setPanel(!this._panelOpen); });
+
+    // fora do menu: atalho "Ir para…" (só na Pessoa) e o bonequinho (é arrastado até a maquete)
+    this._gotoBtn = document.createElement('button'); this._gotoBtn.className = 'panel btn'; this._gotoBtn.textContent = 'Ir para…'; this._gotoBtn.hidden = true;
+    this._gotoBtn.title = 'Vai direto a um cômodo'; this._gotoBtn.setAttribute('aria-pressed', 'false');
+    this._gotoBtn.addEventListener('click', () => this._toggleGoto());
+    btns.appendChild(this._gotoBtn);
+    // Vista de cima (v1.6.1): "‹ Planta" / "‹ Casa" sobe um nível (como o Esc); na planta inteira some
+    this._backBtn = document.createElement('button'); this._backBtn.className = 'panel btn back'; this._backBtn.hidden = true;
+    this._backBtn.addEventListener('click', () => this._navBack()); btns.appendChild(this._backBtn);
+    const PERSON = '<svg viewBox="0 0 256 256" width="20" height="20" fill="currentColor" aria-hidden="true"><path d="M100,36a28,28,0,1,1,28,28A28,28,0,0,1,100,36ZM215.42,140.78l-45.25-51.3a28,28,0,0,0-21-9.48H106.83a28,28,0,0,0-21,9.48l-45.25,51.3a16,16,0,0,0,22.56,22.69L89,142.7l-19.7,74.88a16,16,0,0,0,29.08,13.35L128,180l29.58,51a16,16,0,0,0,29.08-13.35L167,142.7l25.9,20.77a16,16,0,0,0,22.56-22.69Z"/></svg>';   // Phosphor person-fill
+    this._pegBtn = document.createElement('button'); this._pegBtn.className = 'panel btn peg'; this._pegBtn.innerHTML = `${PERSON}<span class="lbl">Andar</span>`;
+    this._pegBtn.title = 'Andar pela casa: arraste até um cômodo e solte para entrar nele (visão de Pessoa) · toque: lista de cômodos';
+    this._pegBtn.setAttribute('aria-label', 'Andar: arraste até um cômodo para entrar nele; Enter abre a lista de cômodos'); this._pegBtn.setAttribute('aria-pressed', 'false');
+    btns.appendChild(this._pegBtn); this._pegBind(this._pegBtn);
+    // dica de primeiro acesso (v1.5.1): aponta para o bonequinho até ele ser usado, a Pessoa abrir ou a dica ser fechada
+    let dicaVista = false; try { dicaVista = !!window.localStorage.getItem('casa3d.dica_pessoa'); } catch (_) {}
+    if (!dicaVista) {
+      const d = document.createElement('div'); d.className = 'panel pegdica'; d.setAttribute('role', 'note');
+      d.textContent = 'Arraste até um cômodo para entrar';
+      const x = document.createElement('button'); x.textContent = '×'; x.setAttribute('aria-label', 'Fechar dica'); x.addEventListener('click', () => this._dicaOff());
+      d.appendChild(x); wrap.appendChild(d); this._dica = d;
+    }
+    this._menuBtn = document.createElement('button'); this._menuBtn.className = 'panel btn menubtn';
+    this._menuBtn.innerHTML = `${iconSvg('menu')}<span class="lbl">Opções</span>`;
+    this._menuBtn.setAttribute('aria-label', 'Opções'); this._menuBtn.title = 'Opções: ambiente, vista, navegação e painel';
+    this._menuBtn.setAttribute('aria-haspopup', 'dialog'); this._menuBtn.setAttribute('aria-expanded', 'false'); this._menuBtn.setAttribute('aria-controls', menu.id);
+    this._menuBtn.addEventListener('click', (e) => this._toggleMenu(null, e.detail === 0));   // detail 0 = veio do teclado → foco no 1º item
+    this._menuBtn.addEventListener('keydown', (e) => { if (e.key === 'ArrowDown' && this._menuBtn.getAttribute('aria-expanded') !== 'true') { e.preventDefault(); this._toggleMenu(true, true); } });
+    btns.appendChild(this._menuBtn);
+    wrap.appendChild(menu);
+    this._menuBind();
+
+    this._pegGhost = document.createElement('div'); this._pegGhost.className = 'pegghost'; this._pegGhost.innerHTML = PERSON; this._pegGhost.hidden = true; wrap.appendChild(this._pegGhost);
+    this._pegTip = document.createElement('div'); this._pegTip.className = 'panel pegtip'; this._pegTip.hidden = true; wrap.appendChild(this._pegTip);
+    this._gotoPanel = document.createElement('div'); this._gotoPanel.className = 'panel goto'; this._gotoPanel.hidden = true; this._gotoPanel.setAttribute('role', 'dialog'); this._gotoPanel.setAttribute('aria-label', 'Ir para um cômodo'); wrap.appendChild(this._gotoPanel);
+    this._fadeEl = document.createElement('div'); this._fadeEl.className = 'fade'; wrap.appendChild(this._fadeEl);
+    // Esc/Backspace na Vista de cima sobem um nível; fora dela o Esc volta o painel do cômodo à visão geral (com o menu aberto, o Esc só fecha ele)
+    const navKey = (e) => {
+      if (this._menuBtn.getAttribute('aria-expanded') === 'true' || (e.key !== 'Escape' && !(e.key === 'Backspace' && this._topView))) return;   // aberto pelo aria-expanded: saindo (150 ms) já conta como fechado
+      if (e.key === 'Escape' && this._sel) this._select(null);   // 1º Esc: o balão do aparelho
+      else if (this._topView) this._navBack(); else if (this._room) this._showRoom(null); else return;
+      e.preventDefault();
+    };
+    canvas.addEventListener('keydown', navKey);
+    const joy = document.createElement('div'); joy.className = 'joy'; joy.hidden = true; joy.setAttribute('role', 'application'); joy.setAttribute('aria-label', 'Andar');
+    const knob = document.createElement('div'); knob.className = 'knob'; joy.appendChild(knob); wrap.appendChild(joy); this._joy = joy;
+    this._walkHint = document.createElement('div'); this._walkHint.className = 'panel walkhint'; wrap.appendChild(this._walkHint);
+    // balão do aparelho tocado (v1.8.1, como na Igreja): nome, estado e a ação, preso ao ponto tocado (_selPlace); abaixo do painel
+    const sel = this._selEl = document.createElement('div'); sel.className = 'sel'; sel.hidden = true; sel.setAttribute('role', 'group');
+    sel.innerHTML = '<span aria-live="polite"><b></b><small></small></span><button type="button"></button>'; wrap.appendChild(sel);
+    [this._selName, this._selState, this._selBtn] = sel.querySelectorAll('b, small, button'); this._selBtn.addEventListener('click', () => this._selAct());
+    sel.addEventListener('keydown', navKey);   // Esc no botão do balão fecha ele
+
+    canvas.addEventListener('pointerdown', () => this._dicaOff(), { once: true });   // a dica do bonequinho some no 1º gesto na cena
+
+    try {
+      this._build3D(canvas);
+    } catch (err) {
+      const e = document.createElement('div'); e.className = 'err';
+      e.textContent = 'Não foi possível iniciar o WebGL: ' + (err && err.message || err);
+      wrap.appendChild(e);
+      console.error('[casa3d-card]', err);
+      return;
+    }
+
+    this._buildPanel(wrap); this._dock.addEventListener('keydown', navKey);
+    if (this._maq) { wrap.classList.add('maq'); this._mpBuild(wrap); this._hotBuild(); }
+    if (this._ro) { this._ro.observe(this._dock); this._ro.observe(this._titleCard); this._ro.observe(this._btnsEl); }   // título/botões mudam de altura → reposiciona coluna e menu
+    this._built = true;
+    this._setLabels(!!this._config.labels);
+    this._applyMode();
+    this._setRoof(!!this._config.roof);
+    if (this._hass) this._syncFromHass();
+    else this._applyDemoDefaults();
+    this._setPanel(this._config.panel !== false, 'peek');   // depois dos estados ("Ligados" se houver algo ligado); folha: abre na espiada, no lugar da pílula
+    if (this._config.start_view === 'top') this._setTopView(true);   // noite: abre na vista geral em perspectiva (girando devagar); start_view: 'top' volta a abrir na planta
+  }
+
+  // Detecção de GPU (cacheada, 1 contexto descartável por página): strong = dedicada/Apple; soft = desenho por software (sem GPU)
+  static _gpuInfo() {
+    if (Casa3DCard.__gpu !== undefined) return Casa3DCard.__gpu;
+    let strong = false, soft = false, glass = false;
+    try {
+      const cv = document.createElement('canvas');
+      const gl = cv.getContext('webgl2') || cv.getContext('webgl');
+      if (gl) {
+        const ext = gl.getExtension('WEBGL_debug_renderer_info');
+        const name = String(ext ? gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) : gl.getParameter(gl.RENDERER) || '');
+        strong = /nvidia|geforce|quadro|rtx|gtx|radeon\s*(rx|pro)|apple m\d|apple gpu/i.test(name) && !/intel|swiftshader|llvmpipe|mali|adreno|powervr/i.test(name);
+        soft = /swiftshader|llvmpipe|softpipe|mesa offscreen|basic render/i.test(name);   // desenho por software (sem GPU)
+        glass = strong && !/apple gpu/i.test(name);   // "Apple GPU" é o nome mascarado do WebKit (até Mac Intel e iPad): forte para a cena, mas sem vidro
+        const lose = gl.getExtension('WEBGL_lose_context'); if (lose) lose.loseContext();
+      }
+    } catch (_) { strong = soft = glass = false; }
+    return (Casa3DCard.__gpu = { strong, soft, glass });
+  }
+  static _strongGPU() { return Casa3DCard._gpuInfo().strong; }
+  // quality: 'alta' | 'media' | 'leve' | 'min' | 'auto' (padrão): min em aparelho muito fraco (software, ≤ 2 GB, ou ≤ 2 núcleos com ≤ 4 GB);
+  // leve em celular/tablet (toque + tela < 900 px) ou com ≤ 4 GB; no PC, alta com GPU dedicada e media com vídeo integrado ou desconhecido
+  _qualityFor(q) {
+    if (['alta', 'media', 'leve', 'min'].includes(q)) return q;
+    try {
+      if (Casa3DCard._gpuInfo().soft || (navigator.deviceMemory || 8) <= 2 || ((navigator.hardwareConcurrency || 8) <= 2 && (navigator.deviceMemory || 8) <= 4)) return 'min';   // só núcleos não basta: navegadores com anti-fingerprint dizem 2
+      const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+      const small = Math.min(window.screen.width, window.screen.height) < 900;
+      if ((coarse && small) || (navigator.deviceMemory || 8) <= 4) return 'leve';
+      return Casa3DCard._strongGPU() ? 'alta' : 'media';   // 'alta' só com GPU dedicada; integrada ou desconhecida → media
+    } catch (_) { return 'leve'; }
+  }
+
+  // ---- Cena 3D ----
+  _build3D(canvas) {
+    const M = materials(); if (this._maq) applyMaquete(M);
+    const renderer = new THREE.WebGLRenderer({ canvas, alpha: !!this._maq, antialias: !Casa3DCard._gpuInfo().soft, powerPreference: 'high-performance' });
+    renderer.toneMapping = THREE.NeutralToneMapping;   // Neutral (não ACES): branco continua branco e as cores não perdem saturação
+    renderer.toneMappingExposure = 1.0;
+    // Salvaguarda de GPU apertada (poucos samplers/uniforms): menos luzes reais e só 1 sombra pontual
+    const caps = renderer.capabilities;
+    this._tight = caps.maxFragmentUniforms < 512 || caps.maxTextures < 16;
+    if (this._tight) console.warn(`[casa3d-card] GPU com margem pequena (fragment uniforms ${caps.maxFragmentUniforms}, samplers ${caps.maxTextures}): menos luzes e sombras`);
+    renderer.shadowMap.enabled = true;
+    renderer.shadowMap.type = this._q === 'alta' || this._q === 'media' ? THREE.PCFSoftShadowMap : this._min ? THREE.BasicShadowMap : THREE.PCFShadowMap;
+    renderer.shadowMap.autoUpdate = false;   // cena estática: sombras só recalculam quando algo muda
+    this._renderer = renderer;
+
+    const scene = new THREE.Scene();
+    this._scene = scene;
+    renderer.setClearColor(0x0a0f1e, this._maq ? 0 : 1);   // maquete: fundo transparente (a página põe o azul-marinho)
+    scene.fog = this._maq ? new THREE.Fog(0x0a0f1e, 1e4, 2e4) : new THREE.Fog(0x0a0f1e, 45, 150);   // maquete: sem neblina
+    this._buildSky(scene, renderer);
+
+    const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 200);
+    this._camera = camera;
+    this._home = this._homeFor(1.6);
+    camera.position.copy(this._home.pos); camera.lookAt(this._home.target);
+    this._orbit = new Orbit(camera, canvas, this._home.target); this._orbit.card = this; this._orbit.userAt = performance.now();
+    this._orbit.onClick = (e) => this._onClick(e);
+    this._orbit.onHover = (e) => this._onHover(e);
+
+    // Luz ambiente (dia/noite). Um único direcional faz de sol (dia) e de lua (noite).
+    this._hemi = new THREE.HemisphereLight(0xbfd8ff, 0x8a8070, 1.6); scene.add(this._hemi);
+    this._amb = new THREE.AmbientLight(0x4a5a80, 0.25); scene.add(this._amb);
+    this._sun = new THREE.DirectionalLight(0xfff0d2, 3.2);
+    this._sunPos = new THREE.Vector3(-9, 22, 7); this._moonPos = new THREE.Vector3(11, 20, -9);
+    this._sunCol = new THREE.Color(0xfff0d2); this._moonCol = new THREE.Color(0x8fa6d8);
+    this._sun.position.copy(this._sunPos); this._sun.target.position.set(6.7, 0, 8.2);
+    this._sun.castShadow = !this._min;   // min: sem nenhuma sombra
+    this._sun.shadow.mapSize.set(this._lite ? 1024 : 2048, this._lite ? 1024 : 2048);
+    const sc = this._sun.shadow.camera; sc.left = -16; sc.right = 16; sc.top = 16; sc.bottom = -16; sc.near = 1; sc.far = 70;
+    this._sun.shadow.bias = -0.0005; this._sun.shadow.normalBias = 0.025;
+    if (this._maq) this._sun.shadow.radius = 5;   // sombras macias de estúdio
+    scene.add(this._sun); scene.add(this._sun.target);
+    if (this._maq && !this._min) { this._hvLight = new THREE.PointLight(0xffb870, 0, 9, 2); this._hvLight.position.set(6, 2.3, 2); this._hvGoal = 0; scene.add(this._hvLight); }   // luz do hover do cômodo
+
+    // Chão em volta (v1.5.1): cor chapada barata (MeshBasic, sem textura nem sombra) que acompanha dia/noite em _frame; recorte da piscina
+    const gsh = new THREE.Shape();
+    gsh.moveTo(-40, 40); gsh.lineTo(53, 40); gsh.lineTo(53, -56); gsh.lineTo(-40, -56); gsh.closePath();
+    gsh.holes.push(this._poolShape());
+    if (this._maq) this._buildSlab(scene);   // maquete: laje-base grossa flutuando (sem terreno infinito em volta)
+    else {
+    this._groundMat = new THREE.MeshBasicMaterial({ color: 0xc9ced6 });
+    const ground = new THREE.Mesh(new THREE.ShapeGeometry(gsh), this._groundMat);
+    ground.rotation.x = -Math.PI / 2; scene.add(ground);
+    }
+
+    this._clickables = []; this._labels = [];
+    // Pisos (zonas)
+    const TX = textures();
+    const FLOOR = { quarto_casal: ['wood', 2.4], quarto: ['wood', 2.4], sala: ['tileWarm', 2.4], balcao: ['tileWarm', 2.4], varanda: ['tileTerra', 1.8],
+      banheiro: ['tileCool', 1.8], dispensa: ['tileWarm', 1.8], garagem: ['concrete', 3], jardim: ['grass', 2.2], patio: ['asphalt', 3] };
+    for (const [id, z] of Object.entries(ZONES)) {
+      let [tk, tile] = FLOOR[id] || ['concrete', 3], mtex = TX[tk], tint = ['wood', 'tileWarm', 'tileCool', 'tileTerra', 'pavers'].includes(tk) ? 0xffffff : 0xdedede;
+      if (this._maq) {   // maquete: carvalho de tábua larga nos sociais/quartos, pedra clara nas áreas molhadas e externas (o grid de cada piso não muda)
+        const Q = maqTextures(), W = { quarto_casal: 'oak', quarto: 'oak', sala: 'oak', balcao: 'stone', varanda: 'stone', banheiro: 'stone', dispensa: 'stone', patio: 'stone', garagem: 'stone' }[id];
+        if (W) { mtex = Q[W]; tile = W === 'oak' ? 2.4 : 1.8; tint = id === 'banheiro' ? 0xd2d8cf : id === 'patio' ? 0xcfc8bb : id === 'garagem' ? 0xd9d3c8 : 0xffffff; }
+        else if (id === 'jardim') tint = 0xb4c4a0;
+      }
+      const map = mtex.clone(); map.repeat.set(z.w / tile, z.d / tile);
+      const ao = this._min ? null : this._makeAO(z.w, z.d);
+      const mat = new THREE.MeshStandardMaterial({ color: tint, map, roughness: this._maq ? 0.7 : 0.9, bumpMap: this._min ? null : map, bumpScale: this._maq ? 0.15 : 0.6, aoMap: ao, aoMapIntensity: 1.0 });
+      const m = new THREE.Mesh(new THREE.PlaneGeometry(z.w, z.d), mat);
+      m.rotation.x = -Math.PI / 2; m.position.set(z.x + z.w / 2, 0.004, z.z + z.d / 2); m.receiveShadow = true;   // pisos a 4 mm: tapetes (≥ 5 mm) ficam por cima sem z-fighting
+      m.userData = { item: z.item || null, zone: id }; scene.add(m);
+      if (z.item) this._clickables.push(m);
+      if (z.label) { const s = this._makeLabel(z.label); s.userData.zone = id; s.position.set(z.lp[0], 3.35, z.lp[1]); scene.add(s); this._labels.push(s); }
+    }
+    this._buildWalls(scene, M);
+    // Rodapés nas zonas internas
+    for (const id of ['quarto_casal', 'quarto', 'sala', 'balcao', 'varanda', 'banheiro', 'dispensa']) {
+      const z = ZONES[id], i = T / 2 + 0.012, hb = 0.09;
+      scene.add(box(z.w - 2 * i, hb, 0.02, M.baseboard, z.x + z.w / 2, hb / 2, z.z + i, { cast: false }));
+      scene.add(box(z.w - 2 * i, hb, 0.02, M.baseboard, z.x + z.w / 2, hb / 2, z.z + z.d - i, { cast: false }));
+      scene.add(box(0.02, hb, z.d - 2 * i, M.baseboard, z.x + i, hb / 2, z.z + z.d / 2, { cast: false }));
+      scene.add(box(0.02, hb, z.d - 2 * i, M.baseboard, z.x + z.w - i, hb / 2, z.z + z.d / 2, { cast: false }));
+    }
+    this._buildPool(scene, M);
+    this._buildFurniture(scene, M);
+    if (this._maq) this._buildSancas(scene);   // fitas âmbar no alto das paredes (depois de _items: só liga com a luz do cômodo)
+
+    // Luminárias + luzes
+    for (const it of ITEMS) {
+      const rt = this._items.get(it.key) || {}; this._items.set(it.key, rt);
+      rt.lights = []; rt.fixtures = []; rt.target = 0; rt.level = 0; rt.color = new THREE.Color(it.color || 0xffffff);
+      if (this._maq && it.kind === 'light') { if (it.key === 'led_piscina') rt.color.set(0x5cf2e4); else rt.color.lerp(new THREE.Color(0xffa95c), 0.55); }   // âmbar ~2700 K · luz da piscina turquesa
+      if (!it.fixtures) continue;
+      // leve/min/GPU apertada: poucas luzes reais por item (LITE_LIGHTS/MIN_LIGHTS), mais fortes e de maior alcance; as demais viram só malha + halo
+      const lite = this._lite || this._tight, n = it.fixtures.length;
+      const liteMax = this._min ? Math.min(n, MIN_LIGHTS[it.key] ?? n) : lite ? Math.min(n, LITE_LIGHTS[it.key] ?? n) : n;
+      const step = n / liteMax;
+      const keep = new Set(Array.from({ length: liteMax }, (_, k) => Math.floor(k * step + step / 2 - 0.5)));
+      const boost = n / keep.size;
+      for (const [fk, f] of it.fixtures.entries()) {
+        if (keep.has(fk)) {
+          const L = new THREE.PointLight(rt.color, 0, lite ? f.d * Math.min(1.35, Math.sqrt(boost)) : f.d, 2);
+          L.position.set(f.p[0], f.p[1], f.p[2]);
+          // sombra pontual: alta = todas; media/leve = só quarto/sala/garagem (256, leve 192, raio 2); min = nenhuma; GPU apertada = só o quarto
+          const main = ['quarto', 'sala', 'garagem'].includes(it.key);
+          if (f.shadow && !this._min && (this._tight ? it.key === 'quarto' : this._q === 'alta' || main)) {
+            const ms = this._q === 'alta' ? 512 : this._lite ? 192 : 256;
+            L.castShadow = true; L.shadow.mapSize.set(ms, ms); if (ms < 512) L.shadow.radius = 2;
+            L.shadow.bias = -0.004; L.shadow.normalBias = 0.03;
+            L.shadow.camera.near = 0.15; L.shadow.camera.far = f.d + 1;
+          }
+          scene.add(L); rt.lights.push({ L, i: lite ? f.i * boost : f.i });
+        }
+        let mesh;
+        if (f.under) {
+          // refletor de parede: disco no lado interno da parede da piscina
+          mesh = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.03, 16), new THREE.MeshStandardMaterial({ color: 0xcfe6ff, emissive: 0x2f9dff, emissiveIntensity: 0 }));
+          mesh.rotation.x = Math.PI / 2; mesh.position.set(f.p[0], f.p[1], f.p[2] - 0.12); mesh.castShadow = false;
+        } else if (f.lamp) {
+          mesh = new THREE.Mesh(new THREE.SphereGeometry(0.12, 14, 10), new THREE.MeshStandardMaterial({ color: 0xf6efe4, emissive: rt.color, emissiveIntensity: 0 }));
+          mesh.position.set(f.p[0], f.p[1], f.p[2]);
+          const base = box(0.18, 0.22, 0.18, M.dark, f.p[0], f.p[1] - 0.2, f.p[2]); scene.add(base);
+        } else if (f.sconce) {
+          mesh = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.28, 0.16), new THREE.MeshStandardMaterial({ color: 0xf2efe8, emissive: rt.color, emissiveIntensity: 0 }));
+          mesh.position.set(f.p[0], f.p[1], f.p[2]);
+        } else {
+          // pendente: cabo + cúpula aberta + lâmpada
+          mesh = new THREE.Mesh(new THREE.SphereGeometry(0.06, 12, 8), new THREE.MeshStandardMaterial({ color: 0xfff6e6, emissive: rt.color, emissiveIntensity: 0 }));
+          mesh.position.set(f.p[0], f.p[1], f.p[2]);
+          const shade = new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.2, 0.17, 20, 1, true), new THREE.MeshStandardMaterial({ color: 0xf2efe8, roughness: 0.6, side: THREE.DoubleSide }));
+          shade.position.set(f.p[0], f.p[1] + 0.09, f.p[2]); shade.castShadow = false; shade.userData = { item: it.key }; scene.add(shade); this._clickables.push(shade);
+          const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.008, 0.008, 0.28, 6), M.dark); rod.position.set(f.p[0], f.p[1] + 0.3, f.p[2]); rod.castShadow = false; scene.add(rod);
+        }
+        mesh.userData = { item: it.key }; mesh.castShadow = false; scene.add(mesh);
+        rt.fixtures.push(mesh); this._clickables.push(mesh);
+        // Halo (bloom barato) na luminária
+        const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: textures().glow, color: rt.color, transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }));
+        const gs = f.under ? 1.3 : f.lamp ? 0.9 : f.sconce ? 1.1 : 1.5;
+        glow.scale.set(gs, gs, 1);
+        if (f.under) glow.position.set(f.p[0], -0.1, f.p[2] + 0.25); else glow.position.copy(mesh.position);
+        scene.add(glow); rt.glows = rt.glows || []; rt.glows.push({ sp: glow, base: f.under ? 0.3 : f.lamp ? 0.7 : 0.8 });
+      }
+    }
+
+    this._buildRoof(scene, M);
+    this._buildDoors(scene);   // folhas das portas (instâncias animáveis) + móveis que atrapalham o giro
+    const stats = mergeStatic(scene);
+    console.info(`[casa3d-card] malhas estáticas: ${stats.before} → ${stats.after} draw calls`);
+    this._buildWalkAids();
+
+    this._raycaster = new THREE.Raycaster();
+    this._ndc = new THREE.Vector2();
+    this._ro = new ResizeObserver((es) => { const th = this._titleCard.offsetHeight; if (!this._sizing && (th !== this._tH || es.some((e) => e.target !== this._titleCard))) this._resize(); this._tH = th; });   // ajustando a largura: nada de _layoutHud/câmera por quadro; do título só a altura conta (a largura anima junto com o painel)
+    this._ro.observe(this);
+    // fora da tela (rolado para longe no dashboard) não gasta GPU com a animação ociosa
+    try { this._io = new window.IntersectionObserver((es) => { this._onScreen = es.some((e) => e.isIntersecting); }); this._io.observe(this); } catch (_) {}
+    if (this._dock) this._ro.observe(this._dock);
+    this._resize();
+    renderer.shadowMap.needsUpdate = true;
+    this._precompile();
+  }
+  // up! do modelo 3D (v1.10): baixa depois da cena pronta e troca o carro desenhado; sem rede ou no nível min, fica o desenhado
+  _loadCar(car) {
+    const cm = this._config.car_model;
+    if (cm === false || this._min) return;
+    const url = typeof cm === 'string' ? cm : new URL('modelos/up-tsi.bin', import.meta.url).href;
+    fetch(url).then((r) => (r.ok ? r.arrayBuffer() : Promise.reject(new Error(r.status)))).then((buf) => {
+      if (!this._scene) return;
+      const novo = upModelo(buf, new THREE.Color(this._config.car_color || '#f3f3f0'));
+      car.traverse((m) => { if (m.isMesh) m.geometry.dispose(); });
+      car.clear(); car.add(novo);
+      this._renderer.shadowMap.needsUpdate = true;
+      this._precompile();
+    }).catch((e) => console.info('casa3d: carro 3D não carregou, fica o desenhado', e && e.message));
+  }
+  // Compila os shaders antes do primeiro quadro — em paralelo quando o navegador deixa (KHR_parallel_shader_compile),
+  // sem travar a página na carga — com o telhado visível, para o botão dele não engasgar depois. Enquanto isso _frame não desenha.
+  _precompile() {
+    const r = this._renderer, hide = [this._roof].filter((g) => g && !g.visible);
+    this._busy = true;
+    let p;
+    try {
+      hide.forEach((g) => { g.visible = true; });
+      if (r.extensions.has('KHR_parallel_shader_compile')) p = r.compileAsync(this._scene, this._camera);
+      else { r.compile(this._scene, this._camera); p = Promise.resolve(); }
+    } catch (e) { p = Promise.resolve(); }
+    hide.forEach((g) => { g.visible = false; });
+    p.catch(() => {}).then(() => { this._busy = false; if (this._orbit) this._orbit.dirty = true; });
+  }
+
+  // Maquete: laje-base de concreto claro (com o recorte da piscina), borda mais clara e uma sombra suave embaixo, flutuando no fundo da página
+  _buildSlab(scene) {
+    const m = 0.55, W = LOT.w, D = LOT.d, depth = 1.3;
+    const sh = new THREE.Shape();
+    sh.moveTo(-m, m); sh.lineTo(W + m, m); sh.lineTo(W + m, -(D + m)); sh.lineTo(-m, -(D + m)); sh.closePath();
+    sh.holes.push(this._poolShape());
+    const geo = new THREE.ExtrudeGeometry(sh, { depth, bevelEnabled: false, steps: 1 });
+    this._groundMat = new THREE.MeshStandardMaterial({ color: 0xcfc8bb, roughness: 0.95 });   // topo: concreto claro quente
+    const side = new THREE.MeshStandardMaterial({ color: 0x4d4943, roughness: 0.8 });         // borda: pedra escura (a laje lê como placa de maquete)
+    const slab = new THREE.Mesh(geo, [this._groundMat, side]);
+    slab.rotation.x = -Math.PI / 2; slab.position.y = -depth - 0.004; slab.receiveShadow = true; slab.castShadow = false;
+    scene.add(slab);
+    // sombra de contato: elipse escura e difusa bem abaixo da laje
+    const cv = document.createElement('canvas'); cv.width = cv.height = 128;
+    const g = cv.getContext('2d'), gr = g.createRadialGradient(64, 64, 6, 64, 64, 64);
+    gr.addColorStop(0, 'rgba(0,0,0,.62)'); gr.addColorStop(0.55, 'rgba(0,0,0,.28)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
+    g.fillStyle = gr; g.fillRect(0, 0, 128, 128);
+    const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
+    const sd = new THREE.Mesh(new THREE.PlaneGeometry((W + 2 * m) * 1.9, (D + 2 * m) * 1.9), new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, fog: false, toneMapped: false }));
+    sd.rotation.x = -Math.PI / 2; sd.position.set(W / 2, -depth - 1.1, D / 2); sd.renderOrder = -5; scene.add(sd);
+  }
+
+  // Domo de céu (dia/noite com crossfade) e mapa de ambiente para reflexos
+  _buildSky(scene, renderer) {
+    const T = textures();
+    const geo = new THREE.SphereGeometry(130, 32, 16);
+    this._skyNight = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: T.skyNight, side: THREE.BackSide, fog: false, depthWrite: false }));
+    this._skyDay = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: T.skyDay, side: THREE.BackSide, fog: false, depthWrite: false, transparent: true, opacity: 0 }));
+    this._skyDusk = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: T.skyDusk, side: THREE.BackSide, fog: false, depthWrite: false, transparent: true, opacity: 0 }));
+    this._skyNight.renderOrder = -3; this._skyDusk.renderOrder = -2; this._skyDay.renderOrder = -1;
+    this._skyNight.position.set(LOT.w / 2, 0, LOT.d / 2); this._skyDay.position.copy(this._skyNight.position); this._skyDusk.position.copy(this._skyNight.position);
+    scene.add(this._skyNight, this._skyDusk, this._skyDay);
+    if (this._maq) this._skyNight.visible = this._skyDusk.visible = this._skyDay.visible = false;   // maquete: a noite é só o fundo da página
+    // Ambiente (PMREM) a partir do próprio céu: reflexos na água/metais e luz difusa (leve e min ficam sem: custava ~1/3 do quadro em GPU integrada)
+    if (!this._lite) try {
+      const pm = new THREE.PMREMGenerator(renderer);
+      const envScene = new THREE.Scene();
+      if (this._maq) {   // estúdio: cúpula off-white quente + 3 painéis de luz (reflexos suaves e luz difusa neutra-quente)
+        envScene.add(new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0xd8d0c4, side: THREE.BackSide })));
+        for (const [x, y, z, w, h, c] of [[-40, 60, 30, 50, 6, 0xfff4e4], [50, 40, -20, 6, 40, 0xffffff], [0, 20, 70, 60, 8, 0xffe8cc]]) { const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, w > h ? 6 : w), new THREE.MeshBasicMaterial({ color: c })); b.position.set(x, y, z); b.lookAt(0, 0, 0); envScene.add(b); }
+        this._envDay = this._envNight = pm.fromScene(envScene, 0.04).texture; pm.dispose();
+        scene.environment = this._envDay; scene.environmentIntensity = 0.5; return;
+      }
+      const dome = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: T.skyDay, side: THREE.BackSide }));
+      const sun = new THREE.Mesh(new THREE.SphereGeometry(6, 12, 8), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+      sun.position.set(-45, 90, 35); envScene.add(dome, sun);
+      this._envDay = pm.fromScene(envScene, 0.04).texture;
+      dome.material.map = T.skyNight; sun.visible = false;
+      this._envNight = pm.fromScene(envScene, 0.04).texture;
+      pm.dispose();
+      scene.environment = this._envNight; scene.environmentIntensity = 0.35;
+    } catch (e) { console.warn('[casa3d-card] sem environment map', e); }
+  }
+
+  // Telhado de telha cerâmica + forro (ligado pelo botão "Telhado")
+  _buildRoof(scene, M) {
+    const g = new THREE.Group(); g.visible = false; g.userData.keep = true; this._roof = g; scene.add(g);
+    const tile = makeTex(256, (gc, s) => {
+      gc.fillStyle = '#a4502c'; gc.fillRect(0, 0, s, s);
+      const rnd = mulberry32(41), rows = 6, cols = 6, rh = s / rows, cw = s / cols;
+      for (let r = 0; r < rows; r++) for (let c = 0; c < cols; c++) {
+        const x = c * cw + (r % 2) * cw / 2, y = r * rh;
+        gc.fillStyle = shade(0xb85f38, 0.86 + rnd() * 0.24); gc.beginPath(); gc.ellipse(x % s, y + rh * 0.55, cw * 0.48, rh * 0.5, 0, Math.PI, 0); gc.fill();
+        gc.fillStyle = 'rgba(60,20,10,0.35)'; gc.fillRect(0, y, s, 2);
+      }
+      grain(gc, s, 42, 3000, 0.1, [90, 40, 20]);
+    }); tile.repeat.set(2.2, 2.2);
+    const roofMat = new THREE.MeshStandardMaterial({ color: 0xffffff, map: tile, roughness: 0.9, bumpMap: tile, bumpScale: 0.4 });
+    const slab = (za, zb, ridgeZ, y0, rise, xa, xb) => {
+      // perfil no plano (z, y) extrudado ao longo de X, com espessura
+      const sh = new THREE.Shape();
+      const t = 0.14, pts = [[za, y0], [ridgeZ, y0 + rise], [zb, y0], [zb, y0 - t], [ridgeZ, y0 + rise - t], [za, y0 - t]];
+      sh.moveTo(pts[0][0], pts[0][1]); for (const [x, y] of pts.slice(1)) sh.lineTo(x, y); sh.closePath();
+      const geo = new THREE.ExtrudeGeometry(sh, { depth: xb - xa, bevelEnabled: false });
+      const m = new THREE.Mesh(geo, roofMat); m.rotation.y = -Math.PI / 2; m.position.x = xb; m.castShadow = true; m.receiveShadow = true; g.add(m);
+      const ridge = box(xb - xa, 0.1, 0.22, M.doorPanel, (xa + xb) / 2, y0 + rise + 0.02, ridgeZ); g.add(ridge);
+      // oitões (triângulos nas pontas)
+      for (const x of [xa + 0.4, xb - 0.4]) {
+        const tri = new THREE.Shape(); tri.moveTo(-(za + 0.4), y0 - t); tri.lineTo(-ridgeZ, y0 + rise - t); tri.lineTo(-(zb - 0.4), y0 - t); tri.closePath();
+        const tm = new THREE.Mesh(new THREE.ShapeGeometry(tri), M.wall); tm.rotation.y = Math.PI / 2; tm.position.x = x; tm.castShadow = true; g.add(tm);
+      }
+    };
+    slab(-0.45, 6.65, 3.1, H, 1.55, -0.45, 12.95);
+    // ala esquerda e garagem: cumeeira ao longo de Z (extrusão ao longo de Z)
+    const slabZ = (xa, xb, ridgeX, y0, rise, za, zb) => {
+      const sh = new THREE.Shape(); const t = 0.14;
+      const pts = [[xa, y0], [ridgeX, y0 + rise], [xb, y0], [xb, y0 - t], [ridgeX, y0 + rise - t], [xa, y0 - t]];
+      sh.moveTo(pts[0][0], pts[0][1]); for (const [x, y] of pts.slice(1)) sh.lineTo(x, y); sh.closePath();
+      const m = new THREE.Mesh(new THREE.ExtrudeGeometry(sh, { depth: zb - za, bevelEnabled: false }), roofMat); m.position.z = za; m.castShadow = true; m.receiveShadow = true; g.add(m);
+      g.add(box(0.22, 0.1, zb - za, M.doorPanel, ridgeX, y0 + rise + 0.02, (za + zb) / 2));
+      for (const z of [za + 0.4, zb - 0.4]) {
+        const tri = new THREE.Shape(); tri.moveTo(xa + 0.4, y0 - t); tri.lineTo(ridgeX, y0 + rise - t); tri.lineTo(xb - 0.4, y0 - t); tri.closePath();
+        const tm = new THREE.Mesh(new THREE.ShapeGeometry(tri), M.wall); tm.position.z = z; tm.castShadow = true; g.add(tm);
+      }
+    };
+    slabZ(-0.45, 2.85, 1.2, H, 0.9, 6.35, 10.75);
+    slabZ(-0.45, 3.45, 1.5, H, 0.95, 10.45, 16.45);
+    // forro (teto) nas zonas internas
+    for (const id of ['quarto_casal', 'quarto', 'sala', 'balcao', 'varanda', 'banheiro', 'dispensa', 'garagem']) {
+      const z = ZONES[id]; const c = new THREE.Mesh(new THREE.PlaneGeometry(z.w, z.d), M.white);
+      c.rotation.x = Math.PI / 2; c.position.set(z.x + z.w / 2, H - 0.02, z.z + z.d / 2); c.receiveShadow = true; g.add(c);
+    }
+  }
+
+  _buildWalls(scene, M) {
+    const wallX = (z, xa, xb, ops = [], h = H, mat = M.wall) => this._wallSeg(scene, M, 'x', z, xa, xb, ops, h, mat);
+    const wallZ = (x, za, zb, ops = [], h = H, mat = M.wall) => this._wallSeg(scene, M, 'z', x, za, zb, ops, h, mat);
+    // Bloco principal
+    wallX(0, 0, 12.5, [{ a: 1.2, b: 2.4, t: 'window' }, { a: 4.4, b: 5.6, t: 'window' }, { a: 11.0, b: 12.0, t: 'window' }]);
+    wallZ(0, 0, 16.0);
+    wallZ(12.5, 0, 6.2);
+    wallZ(3.6, 0, 4.2);
+    wallZ(6.8, 0, 4.2);
+    wallZ(10.3, 0, 2.2);
+    wallX(4.2, 0, 12.5, [{ a: 1.0, b: 1.9, t: 'door' }, { a: 2.5, b: 3.3, t: 'window' }, { a: 4.1, b: 5.0, t: 'door' }, { a: 5.5, b: 6.4, t: 'window' }, { a: 7.4, b: 8.3, t: 'door' }, { a: 9.6, b: 12.2, t: 'glass' }]);
+    // Varanda (parede externa com aberturas para a piscina)
+    wallX(6.2, 0, 12.5, [{ a: 2.9, b: 3.8, t: 'door' }, { a: 4.6, b: 6.6, t: 'window' }, { a: 8.0, b: 12.0, t: 'glass' }]);
+    // Ala esquerda: banheiro, dispensa
+    wallZ(2.4, 6.2, 10.6, [{ a: 7.0, b: 7.9, t: 'door' }, { a: 9.3, b: 10.1, t: 'door' }]);
+    wallX(8.8, 0, 2.4);
+    wallX(10.6, 0, 3.0);
+    // Garagem (aberta para o quintal, portão para a rua)
+    wallZ(3.0, 10.6, 16.0, [{ a: 11.4, b: 15.4, t: 'open' }]);
+    wallX(16.0, 0, 3.0, [{ a: 0.3, b: 2.7, t: 'gate' }]);
+    // Muros do lote
+    wallZ(LOT.w, 0, LOT.d, [], 2.2, M.lowWall);
+    wallX(LOT.d, 3.0, LOT.w, [{ a: 5.6, b: 6.6, t: 'open' }], 1.8, M.lowWall);
+    wallX(-0.05, -0.2, LOT.w, [], 2.2, M.lowWall);
+  }
+
+  // Segmento de parede ao longo de X (z fixo) ou Z (x fixo) com aberturas
+  _wallSeg(scene, M, axis, c, a0, a1, ops, h, mat) {
+    const maq = !!this._maq, W = this._walls || (this._walls = []);   // segmentos sólidos ao nível dos pés, para a colisão da visão de pessoa
+    const put = (len, hh, thick, m, mid, y, opts) => {
+      const mesh = axis === 'x' ? box(len, hh, thick, m, mid, y, c, opts) : box(thick, hh, len, m, c, y, mid, opts);
+      mesh.userData.arch = true;   // arquitetura: não conta como móvel no giro das portas
+      scene.add(mesh); return mesh;
+    };
+    const seg = (a, b, y0, y1, m) => {
+      if (b - a <= 0.001 || y1 - y0 <= 0.001) return;
+      if (y0 <= 0.5 && y1 >= 0.9) W.push({ axis, c, a0: a, a1: b, t: T, h });   // parede cheia ou sob o peitoril; vergas (y0 2,1) não bloqueiam
+      put(b - a, y1 - y0, T, m, (a + b) / 2, (y0 + y1) / 2);
+      // tampa ligeiramente acima do topo (e com altura diferente por eixo) → sem faces coplanares
+      if (Math.abs(y1 - h) < 0.001) {
+        if (maq) { put(b - a, 0.035, T + 0.05, M.wallCap, (a + b) / 2, h + (axis === 'x' ? 0.0175 : 0.0165), { cast: false }); put(b - a, 0.02, T + 0.015, M.wallCap, (a + b) / 2, h + (axis === 'x' ? 0.045 : 0.043), { cast: false }); }   // topo do corte creme com degrau (chanfro)
+        else put(b - a, 0.03, T + 0.03, M.wallCap, (a + b) / 2, h + (axis === 'x' ? 0.02 : 0.018), { cast: false });
+      }
+    };
+    const pane = (a, b, y0, y1) => { if (y0 <= 0.5) W.push({ axis, c, a0: a, a1: b, t: 0.02, h: y1 }); return put(b - a, y1 - y0, 0.02, M.glass, (a + b) / 2, (y0 + y1) / 2, { cast: false, receive: false }); };   // vidro fixo do chão bloqueia
+    // batente: ombreiras + verga (e peitoril se y0 > 0)
+    const frame = (a, b, y0, y1) => {
+      if (maq) {   // esquadria preta fina: ombreiras de 3,5 cm, verga e peitoril de 3 cm
+        put(0.035, y1 - y0, T + 0.03, M.frame, a + 0.0175, (y0 + y1) / 2); put(0.035, y1 - y0, T + 0.03, M.frame, b - 0.0175, (y0 + y1) / 2);
+        put(b - a, 0.035, T + 0.03, M.frame, (a + b) / 2, y1 - 0.0175);
+        if (y0 > 0.01) put(b - a + 0.04, 0.03, T + 0.07, M.frame, (a + b) / 2, y0 + 0.015);
+        return;
+      }
+      put(0.06, y1 - y0, T + 0.06, M.frame, a + 0.03, (y0 + y1) / 2); put(0.06, y1 - y0, T + 0.06, M.frame, b - 0.03, (y0 + y1) / 2);
+      put(b - a, 0.06, T + 0.06, M.frame, (a + b) / 2, y1 - 0.03);
+      if (y0 > 0.01) put(b - a + 0.12, 0.04, T + 0.16, M.frame, (a + b) / 2, y0 + 0.02);
+    };
+    const mesh_off = (m, ax, d) => { if (ax === 'x') m.position.z += d; else m.position.x += d; };
+    const mullion = (a, b, y0, y1) => put(maq ? 0.025 : 0.04, y1 - y0, T + (maq ? 0.015 : 0.02), M.frame, (a + b) / 2, (y0 + y1) / 2);
+    let cur = a0;
+    const sorted = [...ops].sort((p, q) => p.a - q.a);
+    for (const o of sorted) {
+      seg(cur, o.a, 0, h, mat);
+      if (o.t === 'door') {
+        seg(o.a, o.b, 2.1, h, mat); frame(o.a, o.b, 0, 2.1);
+        // a folha, as almofadas e a maçaneta são instâncias próprias (abrem no modo Pessoa; fechadas ficam como sempre)
+        this._doorAdd(axis, c, o, M);
+      } else if (o.t === 'gate') {
+        W.push({ axis, c, a0: o.a, a1: o.b, t: T, h: 2.25 });   // portão fechado bloqueia
+        seg(o.a, o.b, 2.25, h, mat); frame(o.a, o.b, 0, 2.25);
+        for (let y = 0.2; y < 2.15; y += 0.24) put(o.b - o.a - 0.12, 0.14, 0.04, M.steel, (o.a + o.b) / 2, y + 0.07, { cast: false });
+      } else if (o.t === 'window') {
+        seg(o.a, o.b, 0, 1.0, mat); seg(o.a, o.b, 2.15, h, mat); frame(o.a, o.b, 1.0, 2.15); pane(o.a, o.b, 1.0, 2.15); mullion(o.a, o.b, 1.0, 2.15);
+      } else if (o.t === 'glass') {
+        seg(o.a, o.b, 2.25, h, mat); frame(o.a, o.b, 0, 2.25); pane(o.a, o.b, 0, 2.25);
+        const n = Math.max(maq ? 2 : 1, Math.round((o.b - o.a) / (maq ? 1.3 : 1.0))); for (let i = 1; i < n; i++) mullion(o.a + ((o.b - o.a) * i) / n - 0.02, o.a + ((o.b - o.a) * i) / n + 0.02, 0, 2.25);
+        if (maq) {   // portas de correr: trilho preto no piso, puxadores finos nas emendas e folhas alternadas (leve defasagem)
+          put(o.b - o.a, 0.02, T + 0.05, M.frame, (o.a + o.b) / 2, 0.01);
+          for (let i = 1; i < n; i++) { const x = o.a + ((o.b - o.a) * i) / n; put(0.012, 0.34, T + 0.06, M.frame, x + (i % 2 ? 0.05 : -0.05), 1.05, { cast: false }); }
+          for (let i = 0; i < n; i++) { const x0 = o.a + ((o.b - o.a) * i) / n, x1 = o.a + ((o.b - o.a) * (i + 1)) / n, off = i % 2 ? 0.02 : -0.02; mesh_off(put(x1 - x0 - 0.04, 0.02, 0.012, M.frame, (x0 + x1) / 2, 2.1, { cast: false }), axis, off); }
+        }
+      } else if (o.t === 'open') {
+        seg(o.a, o.b, Math.min(h - 0.35, 2.3), h, mat);
+      }
+      cur = o.b;
+    }
+    seg(cur, a1, 0, h, mat);
+  }
+
+  // Contorno da piscina no plano XY da forma (y = -z); `grow` alarga o contorno
+  _poolShape(grow = 0) {
+    const r = POOL.r + grow, x0 = POOL.x0 - grow;
+    const sh = new THREE.Shape();
+    sh.moveTo(x0, -(POOL.zc - r));
+    sh.lineTo(POOL.x1, -(POOL.zc - r));
+    sh.absarc(POOL.x1, -POOL.zc, r, Math.PI / 2, -Math.PI / 2, true);
+    sh.lineTo(x0, -(POOL.zc + r));
+    sh.closePath();
+    return sh;
+  }
+
+  _buildPool(scene, M) {
+    // Deck com o recorte da piscina (forma no plano XY; y = -z)
+    const pool = this._poolShape();
+    const deck = new THREE.Shape();
+    deck.moveTo(DECK.x, -DECK.z); deck.lineTo(DECK.x + DECK.w, -DECK.z);
+    deck.lineTo(DECK.x + DECK.w, -(DECK.z + DECK.d)); deck.lineTo(DECK.x, -(DECK.z + DECK.d)); deck.closePath();
+    deck.holes.push(pool);
+    const deckMesh = new THREE.Mesh(new THREE.ShapeGeometry(deck), M.deck);
+    deckMesh.rotation.x = -Math.PI / 2; deckMesh.position.y = 0.02; deckMesh.receiveShadow = true; scene.add(deckMesh);
+    // Borda (anel de pedra clara em volta da água)
+    const ring = this._poolShape(0.3); ring.holes.push(this._poolShape());
+    const rim = new THREE.Mesh(new THREE.ShapeGeometry(ring), this._maq ? new THREE.MeshStandardMaterial({ color: 0xece5d8, roughness: 0.8 }) : M.white);   // maquete: borda de pedra clara
+    rim.rotation.x = -Math.PI / 2; rim.position.y = 0.035; rim.receiveShadow = true; rim.castShadow = false; scene.add(rim);
+    // Bacia
+    const basin = new THREE.Mesh(new THREE.ExtrudeGeometry(pool, { depth: POOL.depth, bevelEnabled: false }), [new THREE.MeshBasicMaterial({ visible: false }), M.basin]);
+    basin.rotation.x = -Math.PI / 2; basin.position.y = -POOL.depth; basin.receiveShadow = true; basin.castShadow = false; scene.add(basin);
+    const bottom = new THREE.Mesh(new THREE.ShapeGeometry(pool), M.basin);
+    bottom.rotation.x = -Math.PI / 2; bottom.position.y = -POOL.depth + 0.01; bottom.receiveShadow = true; scene.add(bottom);
+    // Água
+    this._waterU = {
+      time: { value: 0 }, normalMap: { value: textures().waterNormal }, caustic: { value: textures().caustics },
+      sunDir: { value: new THREE.Vector3(0.3, 0.8, 0.5) }, sunColor: { value: new THREE.Color(0xfff0d2) }, sunIntensity: { value: 1 },
+      skyTop: { value: new THREE.Color(0x5f9bdc) }, skyHorizon: { value: new THREE.Color(0xe6eef6) },
+      deepColor: { value: new THREE.Color(0x0b3f78) }, shallowColor: { value: new THREE.Color(0x2a9bc0) },
+      ledColor: { value: new THREE.Color(0x2a8cff) }, ledIntensity: { value: 0 },
+      pool: { value: new THREE.Vector4(POOL.x0, POOL.x1, POOL.zc, POOL.r) },
+      led1: { value: new THREE.Vector2(4.7, 8.34) }, led2: { value: new THREE.Vector2(6.5, 8.34) }, led3: { value: new THREE.Vector2(8.3, 8.34) },
+    };
+    this._waterMat = new THREE.ShaderMaterial({ uniforms: THREE.UniformsUtils.merge([THREE.UniformsLib.fog, this._waterU]), vertexShader: WATER_VERT, fragmentShader: WATER_FRAG,
+      transparent: true, depthWrite: false, side: THREE.DoubleSide, fog: true });
+    this._waterU = this._waterMat.uniforms;
+    const water = new THREE.Mesh(new THREE.ShapeGeometry(pool), this._waterMat);
+    water.rotation.x = -Math.PI / 2; water.position.y = -0.16; water.receiveShadow = true; water.castShadow = false;
+    water.userData = { item: 'led_piscina' }; scene.add(water); this._clickables.push(water);
+    // Escadas
+    for (const x of [POOL.x0 + 0.3, POOL.x1 + 0.6]) {
+      const rail = box(0.05, 0.6, 0.5, M.steel, x, 0.3, POOL.zc - POOL.r + 0.05); rail.castShadow = false; scene.add(rail);
+    }
+    // Casa de máquinas / bomba
+    const pumpRt = this._items.get('bomba_piscina') || {}; this._items.set('bomba_piscina', pumpRt);
+    const pump = box(0.6, 0.5, 0.45, M.pump, 11.35, 0.25, 12.9); pump.userData = { item: 'bomba_piscina' }; scene.add(pump); this._clickables.push(pump);
+    const pipe = box(0.08, 0.08, 1.2, M.steel, 11.1, 0.12, 12.1); pipe.castShadow = false; scene.add(pipe);
+    pumpRt.led = new THREE.Mesh(new THREE.SphereGeometry(0.05, 10, 8), new THREE.MeshStandardMaterial({ color: 0x1b3d2a, emissive: 0x22c55e, emissiveIntensity: 0 }));
+    pumpRt.led.position.set(11.35, 0.52, 12.72); pumpRt.led.castShadow = false; scene.add(pumpRt.led);
+    pumpRt.fixtures = [pump];
+  }
+
+  _buildFurniture(scene, M) {
+    const F = furniture(M);
+    const place = (g, x, z, ry = 0, y = 0) => { g.position.set(x, y, z); g.rotation.y = ry; scene.add(g); return g; };
+    // materiais iguais (mesmas opções) viram o mesmo objeto → menos draw calls depois do mergeStatic
+    const matCache = new Map();
+    const std = (o) => {
+      const opts = Object.assign({ roughness: 0.9, metalness: 0 }, o || {});
+      let key = null; try { key = JSON.stringify(opts, (k, v) => (v && v.isColor) ? '#' + v.getHexString() : v); } catch (_) { key = null; }
+      if (key && matCache.has(key)) return matCache.get(key);
+      const m = new THREE.MeshStandardMaterial(opts); if (key) matCache.set(key, m); return m;
+    };
+    const Fx = Object.assign({}, F, { ladder: () => new THREE.Group() });   // sem escadas na piscina
+    const ctx = (seed) => ({ THREE, M, F: Fx, box, cyl, sph, std, place, add: (m) => scene.add(m), rnd: mulberry32(seed), POOL, DECK, LOT, ZONES, H, T });
+    // Objetos ligados a entidades ficam fora da decoração dos cômodos
+    // TV na parede do quarto (entidade media_player)
+    const tvRt = this._items.get('tv') || {}; this._items.set('tv', tvRt);
+    scene.add(box(0.05, 0.64, 1.08, M.dark, 6.7, 1.45, 2.1));
+    tvRt.screenMat = new THREE.MeshStandardMaterial({ color: 0x0b0b0b, emissive: 0x9db6ff, emissiveIntensity: 0, roughness: 0.3 });
+    const screen = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.56, 1.0), tvRt.screenMat); screen.position.set(6.66, 1.45, 2.1); screen.castShadow = false;
+    screen.userData = { item: 'tv' }; scene.add(screen); this._clickables.push(screen); tvRt.fixtures = [screen];
+    tvRt.light = new THREE.PointLight(0x9db6ff, 0, 3.5, 2); tvRt.light.position.set(6.4, 1.45, 2.1); scene.add(tvRt.light);
+    // Ar-condicionado (entidade climate)
+    const acRt = this._items.get('ac') || {}; this._items.set('ac', acRt);
+    const ac = box(0.95, 0.3, 0.22, M.white, 7.6, 2.35, 0.2); ac.userData = { item: 'ac' }; scene.add(ac); this._clickables.push(ac); acRt.fixtures = [ac];
+    scene.add(box(0.85, 0.05, 0.02, M.steel, 7.6, 2.24, 0.315));
+    acRt.ledMat = new THREE.MeshStandardMaterial({ color: 0x0a2a3a, emissive: 0x67d3ff, emissiveIntensity: 0 });
+    const led = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.03, 0.02), acRt.ledMat); led.position.set(7.9, 2.31, 0.32); led.castShadow = false; scene.add(led);
+    // Carro na garagem (cor em `car_color`)
+    const car = place(F.upTsi(new THREE.Color(this._config.car_color || '#f3f3f0')), 1.5, 13.6);
+    car.userData.keep = true;   // fora do mergeStatic: o modelo 3D entra no lugar quando chegar
+    this._loadCar(car);
+
+    // Decoração por cômodo (funções room*, no topo do arquivo)
+    // @room quarto_casal
+    roomQuartoCasal(ctx(11));
+    // @endroom
+    // @room quarto
+    roomQuarto(ctx(12));
+    // @endroom
+    // @room sala_cozinha
+    roomSalaCozinha(ctx(13));
+    // @endroom
+    // @room varanda_piscina
+    roomVarandaPiscina(ctx(14));
+    // @endroom
+    // @room banheiro_dispensa
+    roomBanheiroDispensa(ctx(15));
+    // @endroom
+    // @room garagem_jardim
+    roomGaragemJardim(ctx(16));
+    // @endroom
+  }
+
+  // Sombra suave junto às paredes (AO falsa): textura branca com bordas escurecidas
+  _makeAO(w, d) {
+    const c = document.createElement('canvas'); c.width = c.height = 128; const g = c.getContext('2d');
+    g.fillStyle = '#fff'; g.fillRect(0, 0, 128, 128);
+    const fx = Math.min(0.45, 0.55 / w) * 128, fz = Math.min(0.45, 0.55 / d) * 128;
+    const strip = (x0, y0, x1, y1, gx0, gy0, gx1, gy1) => { const gr = g.createLinearGradient(gx0, gy0, gx1, gy1); gr.addColorStop(0, 'rgba(0,0,0,0.5)'); gr.addColorStop(1, 'rgba(0,0,0,0)'); g.fillStyle = gr; g.fillRect(x0, y0, x1 - x0, y1 - y0); };
+    strip(0, 0, fx, 128, 0, 0, fx, 0); strip(128 - fx, 0, 128, 128, 128, 0, 128 - fx, 0);
+    strip(0, 0, 128, fz, 0, 0, 0, fz); strip(0, 128 - fz, 128, 128, 0, 128, 0, 128 - fz);
+    const t = new THREE.CanvasTexture(c); t.channel = 0; return t;
+  }
+
+  _makeWaterTexture() {
+    const c = document.createElement('canvas'); c.width = c.height = 256; const g = c.getContext('2d');
+    g.fillStyle = '#2b6fb6'; g.fillRect(0, 0, 256, 256);
+    g.strokeStyle = 'rgba(200,232,255,0.55)'; g.lineWidth = 2.4; g.lineJoin = 'round';
+    const rnd = mulberry32(11);
+    for (let i = 0; i < 26; i++) {
+      const cx = rnd() * 256, cy = rnd() * 256, r = 10 + rnd() * 26, k = 2 + Math.floor(rnd() * 3), ph = rnd() * 6;
+      for (const ox of [-256, 0, 256]) for (const oy of [-256, 0, 256]) {
+        g.beginPath();
+        for (let a = 0; a <= Math.PI * 2 + 0.05; a += 0.2) {
+          const rr = r * (0.78 + 0.28 * Math.sin(a * k + ph));
+          const x = cx + ox + Math.cos(a) * rr, y = cy + oy + Math.sin(a) * rr;
+          a === 0 ? g.moveTo(x, y) : g.lineTo(x, y);
+        }
+        g.stroke();
+      }
+    }
+    const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(2.4, 1.3); t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  }
+
+  // rótulo do cômodo: pílula de vidro escuro com texto de 12 px, do mesmo tamanho na tela em qualquer zoom (escala em _resize)
+  _makeLabel(text) {
+    const c = document.createElement('canvas'), s = 3, font = '600 12px -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif';
+    let g = c.getContext('2d'); g.font = font;
+    const w = Math.ceil(g.measureText(text).width) + 16, h = 22;
+    c.width = w * s; c.height = h * s; g = c.getContext('2d'); g.scale(s, s);
+    g.fillStyle = 'rgba(28,28,30,.72)'; g.beginPath(); g.roundRect(0, 0, w, h, h / 2); g.fill();
+    g.font = font; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillStyle = '#ffffff'; g.fillText(text, w / 2, h / 2 + 0.5);
+    const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace;
+    const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: t, transparent: true, depthTest: false, depthWrite: false, sizeAttenuation: false }));
+    sp.userData.px = [w, h]; sp.renderOrder = 20;
+    return sp;
+  }
+
+  // ---- Estado ----
+  _applyDemoDefaults() {
+    for (const it of ITEMS) this._setItemState(it.key, { state: 'off', attrs: {} });
+    this._refreshSub(); this._renderPanel();
+  }
+
+  _syncFromHass() {
+    const hass = this._hass; if (!hass || !hass.states) return;
+    const sig = ITEMS.map((it) => { const s = hass.states[this.entity(it.key)], a = (s && s.attributes) || {}; return s ? [s.state, a.brightness, a.rgb_color, a.temperature, a.current_temperature, a.hvac_action, a.media_title, a.volume_level].join('|') : 'x'; }).join(';')
+      + '|' + (hass.states[this.entity('sun')] || {}).state   // tudo o que o painel mostra: brilho, título e volume não ficam presos
+      + '|' + Object.keys(this._autoLast).map((id) => { const s = hass.states[id]; return s ? s.state + (s.attributes || {}).last_triggered : 'x'; }).join(';');   // automações já vistas (ordem fixa): disparo e liga/desliga refazem Automações e Atividade
+    if (sig === this._lastSig) return;
+    this._lastSig = sig;
+    const seeded = !!this._activitySeeded;
+    for (const it of ITEMS) {
+      const s = hass.states[this.entity(it.key)];
+      const prev = this._state[it.key];
+      const next = s ? { state: s.state, attrs: s.attributes || {} } : { state: 'unavailable', attrs: {} };
+      if (seeded && prev && prev.state !== next.state && next.state !== 'unavailable') this._pushActivity(it.key, next.state, Date.now());
+      this._setItemState(it.key, next);
+      if (s && s.last_changed) this._lastChanged[it.key] = s.last_changed;
+    }
+    // Automações do HA: descobertas pelo domínio; disparos entram na atividade
+    const autos = [];
+    for (const st of Object.values(hass.states)) {
+      if (!st.entity_id || !st.entity_id.startsWith('automation.')) continue;
+      const a = st.attributes || {}; const last = a.last_triggered ? new Date(a.last_triggered).getTime() : 0;
+      autos.push({ id: st.entity_id, name: a.friendly_name || st.entity_id.slice(11), on: st.state === 'on', last });
+      const prevLast = this._autoLast[st.entity_id];
+      if (seeded && prevLast !== undefined && last && last !== prevLast) this._pushActivity(st.entity_id, 'triggered', last);
+      this._autoLast[st.entity_id] = last;
+    }
+    autos.sort((x, y) => y.last - x.last);
+    this._autos = autos;
+    if (!seeded) {
+      for (const a of autos) if (a.last) this._pushActivity(a.id, 'triggered', a.last, true);
+      // Semente do histórico: última mudança de cada entidade, conforme o HA reporta
+      for (const it of ITEMS) { const st = this._state[it.key]; if (st && !st.unavailable && this._lastChanged[it.key]) this._pushActivity(it.key, st.state, new Date(this._lastChanged[it.key]).getTime(), true); }
+      this._activitySeeded = true;
+      if (this._panelOpen && !this._room) this._setZone(this._onKeys().length ? 'on' : '');   // 1º retrato do HA chegou com o painel aberto: "Ligados" se houver
+    }
+    this._renderPanel();
+    this._timeAt = 0;
+    this._applyMode();
+    this._refreshSub();
+  }
+
+  _setItemState(key, { state, attrs }) {
+    const it = ITEMS.find((i) => i.key === key); const rt = this._items.get(key); if (!it || !rt) return;
+    const unavailable = state === 'unavailable' || state === 'unknown';
+    let on = false, val = '';
+    if (it.kind === 'light' || it.kind === 'switch') on = state === 'on';
+    else if (it.kind === 'climate') {
+      on = !unavailable && state !== 'off';
+      const mode = { cool: 'Frio', heat: 'Quente', heat_cool: 'Auto', fan_only: 'Ventilar', dry: 'Seco', auto: 'Auto', off: 'Desligado' }[state] || state;
+      const t = attrs.temperature, cur = attrs.current_temperature;
+      val = unavailable ? 'indisponível' : (on ? `${mode}${t != null ? ' · ' + t + '°' : ''}` : 'Desligado') + (cur != null ? ` · ${cur}° atual` : '');
+    } else if (it.kind === 'media') {
+      on = state === 'playing' || state === 'on' || state === 'paused';
+      val = unavailable ? 'indisponível' : ({ playing: 'Tocando', paused: 'Pausado', idle: 'Ociosa', off: 'Desligada', standby: 'Standby', on: 'Ligada' }[state] || state);
+      if (state === 'playing' && attrs.media_title) val = attrs.media_title;
+    } else if (it.kind === 'sensor') {
+      if (it.key === 'presenca') { on = state === 'on'; val = unavailable ? 'indisponível' : on ? 'alguém no quarto' : 'ninguém'; }
+      else if (it.key === 'pessoa') { on = state === 'home'; val = unavailable ? 'indisponível' : state === 'home' ? 'em casa' : state === 'not_home' ? 'fora' : state; }
+      else { on = !unavailable && +state > 5; val = unavailable ? 'indisponível' : `${Math.round(+state)} lx`; }
+    }
+    if ((it.kind === 'light' || it.kind === 'switch') && unavailable) val = 'indisponível';
+    this._state[key] = { on, state, attrs, unavailable };
+    rt.target = on ? 1 : 0;
+    if (it.rgb) {
+      const rgb = attrs.rgb_color;
+      const c = rgb ? new THREE.Color(rgb[0] / 255, rgb[1] / 255, rgb[2] / 255) : new THREE.Color(it.color);
+      const bright = attrs.brightness != null ? clamp(attrs.brightness / 255, 0.15, 1) : 1;
+      rt.color.copy(c); rt.brightScale = bright;
+      for (const f of rt.fixtures || []) f.material.emissive.copy(c);
+    }
+    if (it.kind === 'climate') { rt.hvac = state; rt.on = on; }
+    this._state[key].text = val;
+    if (this._orbit) this._orbit.dirty = true;   // luz acende/apaga: um quadro novo, sem refazer as sombras (a geometria é a mesma)
+  }
+
+  _refreshSub() {   // só o título: o painel quem desenha é quem chama (_syncFromHass, _activate, _applyDemoDefaults), um render por atualização
+    const lights = ITEMS.filter((i) => i.kind === 'light');
+    const n = lights.filter((i) => this._state[i.key] && this._state[i.key].on).length;
+    this._subEl.textContent = ` · ${n === 1 ? '1 luz acesa' : n ? `${n} luzes acesas` : 'luzes apagadas'}`;
+    if (this._maq) { if (this._mpOpen) this._mpRender(); this._maqEmit(); }
+  }
+
+  // Relógio + sol: hora local (ou simulada), elevação/azimute (do HA quando houver)
+  _updateTime(force = false) {
+    const now = Date.now();
+    if (!force && this._timeAt && now - this._timeAt < 1000) return;
+    this._timeAt = now;
+    const cfg = this._config, hc = this._hass && this._hass.config;
+    const lat = hc && hc.latitude != null ? hc.latitude : cfg.latitude, lon = hc && hc.longitude != null ? hc.longitude : cfg.longitude;
+    const tz = (hc && hc.time_zone) || cfg.timezone;
+    const date = this._simTime ? new Date(this._simTime) : new Date(now);
+    let sun = null;
+    const hs = this._hass && this._hass.states && this._hass.states[this.entity('sun')];
+    if (!this._simTime && hs && hs.attributes && hs.attributes.elevation != null) sun = { elevation: +hs.attributes.elevation, azimuth: +hs.attributes.azimuth };
+    else sun = solarPosition(date, lat, lon);
+    this._sunInfo = sun;
+    let txt = '';
+    try { txt = new Intl.DateTimeFormat('pt-BR', { timeZone: tz, hour: '2-digit', minute: '2-digit' }).format(date); } catch (_) { txt = fmtClock(date); }
+    // nascer/pôr do sol do dia (varredura de 5 em 5 min; recalcula uma vez por dia)
+    const dayKey = Math.floor((date.getTime() - 3 * 3600000) / 86400000);
+    if (this._sunDay !== dayKey) {
+      this._sunDay = dayKey; let rise = null, set = null, prev = null;
+      const d0 = new Date(date); d0.setHours(0, 0, 0, 0);
+      for (let m = 0; m <= 1440; m += 5) { const el2 = solarPosition(new Date(d0.getTime() + m * 60000), lat, lon).elevation; if (prev !== null) { if (prev < -0.83 && el2 >= -0.83) rise = d0.getTime() + m * 60000; if (prev >= -0.83 && el2 < -0.83) set = d0.getTime() + m * 60000; } prev = el2; }
+      this._sunTimes = { rise, set };
+    }
+    if (this._clockEl) this._clockEl.innerHTML = `${txt}${this._simTime ? '<span class="per"> · simulado</span>' : ''}`;
+  }
+  setSimTime(date) { this._simTime = date ? new Date(date).getTime() : null; this._updateTime(true); this._orbit.dirty = true; }
+  _applyMode() {
+    this._updateTime(true);
+    const el = this._sunInfo ? this._sunInfo.elevation : -20;
+    const night = this._mode === 'night' ? true : this._mode === 'day' ? false : el < 1;
+    this._night = night;
+    for (const [m, b] of Object.entries(this._modeBtns)) b.setAttribute('aria-pressed', m === this._mode ? 'true' : 'false');
+    this._nvBtn.setAttribute('aria-pressed', this._nightVision ? 'true' : 'false');
+    this._nvAvail(night);
+  }
+
+  // Visão noturna só vale à noite: de dia o item fica apagado e diz por quê
+  _nvAvail(night) {
+    const b = this._nvBtn; b.disabled = !night; b.style.opacity = night ? '' : '.55';
+    b.querySelector('small').textContent = night ? 'à noite, casa inteira visível' : 'só à noite';
+    b.title = night ? 'À noite, deixa a casa inteira visível (luz de lua)' : 'Só à noite — de dia a casa já aparece inteira';
+  }
+
+  _setLabels(on) {
+    this._labelsOn = on;
+    if (this._labels && this._camera) this._declutter();   // na visão de pessoa os rótulos (por cima de tudo) atrapalham; no nível cômodo o painel já diz o nome
+    this._labelsBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    if (this._orbit) this._orbit.dirty = true;
+  }
+
+  // Posição inicial da câmera: em telas estreitas (retrato) afasta para caber o lote inteiro
+  _homeFor(aspect) {
+    const target = new THREE.Vector3(6.7, 0, 8.6);
+    const dir = new THREE.Vector3(1.8, 17.5, 14.3).normalize();
+    const k = aspect >= 1.25 ? 1 : Math.pow(1.25 / Math.max(aspect, 0.3), 0.8);
+    return { pos: target.clone().addScaledVector(dir, 22.7 * k * (this._maq ? (aspect >= 1.25 ? 1.2 : 1.04) : 1)), target };   // maquete: um pouco mais longe (a laje inteira cabe em qualquer ângulo do giro)
+  }
+  _setRoof(on) {
+    if (on && this._topView) this._setTopView(false, true);   // Telhado tira da planta
+    this._roofOn = !!on;
+    if (this._roof) this._roof.visible = this._roofOn;
+    this._roofBtn.setAttribute('aria-pressed', this._roofOn ? 'true' : 'false');
+    this._needShadow = true; this._orbit.dirty = true;
+  }
+  // Vista de cima: enquadra o nível atual (lote inteiro inclinado · área · cômodo reto de cima)
+  _resetView(fly = false) {
+    const n = this._nav, rects = n.room ? n.room.rects : n.block ? n.block.rooms.flatMap((r) => r.rects) : [[0, 0, LOT.w, LOT.d]];
+    this._home = this._topView ? this._frameRect(...this._roomBox({ rects }), n.block ? 0.035 : 0.5) : this._homeFor(this._camera.aspect);
+    if (fly) this._flyCam(this._home.pos, this._home.target, 3.2); else this._orbit.reset(this._home.pos, this._home.target);
+    this._orbit.touched = false;
+  }
+  // câmera vinda de +z (do quintal para a casa) inclinada `phi` (0 = a prumo) com o retângulo [x0, z0, x1, z1] e as paredes (até H) inteiros
+  // no quadro: para cada canto, a distância em que ele cabe na largura e na altura da tela (a faixa livre: ver _resize)
+  _frameRect(x0, z0, x1, z1, phi, m = 0.5) {
+    const tanV = Math.tan(this._camera.fov * Math.PI / 360), tanH = tanV * this._camera.aspect;
+    const target = new THREE.Vector3((x0 + x1) / 2, 0, (z0 + z1) / 2), back = new THREE.Vector3(0, Math.cos(phi), Math.sin(phi)), up = new THREE.Vector3(0, Math.sin(phi), -Math.cos(phi)), p = new THREE.Vector3();
+    let d = 0;
+    for (const x of [x0 - m, x1 + m]) for (const z of [z0 - m, z1 + m]) for (const y of [0, H]) {
+      p.set(x, y, z).sub(target); const k = p.dot(back);
+      d = Math.max(d, k + Math.abs(p.x) / tanH, k + Math.abs(p.dot(up)) / tanV);
+    }
+    return { pos: target.clone().addScaledVector(back, d), target };
+  }
+  // voo suave da câmera; com prefers-reduced-motion corta direto para a pose
+  _flyCam(pos, target, speed) {
+    const o = this._orbit; o.fly(pos, target, speed);
+    if (this._reduced) { o.sph.copy(o.goal); o.target.copy(o.targetGoal); o.speed = 9; }
+    o.dirty = true;
+  }
+
+  // ---- Portas que abrem sozinhas no modo Pessoa (v1.4) ----
+  // Cada porta interna (op 'door' de _wallSeg) vira uma definição em this._doors: uma folha com pivô na dobradiça, cujas peças
+  // (folha, almofadas, rosetas e alavancas) são INSTÂNCIAS de poucos InstancedMesh (fechadas ficam idênticas às de antes).
+  // O quadro da folha tem x = ao longo da parede e z = lateral; no eixo z ele é o mundo girado −90°.
+  _doorNew(d) {
+    d = Object.assign({ leaves: [], q: 0, p: 0, hs: 0, lever: true, target: 0, side: 1, open: 1.5, max: { '-1': 1.55, '1': 1.55 }, awayAt: 0, hold: 0, suppress: false, moving: false, dist: 99, du: 99, n: 0 }, d);
+    d.mx = d.axis === 'x' ? (d.a + d.b) / 2 : d.c; d.mz = d.axis === 'x' ? d.c : (d.a + d.b) / 2;
+    return d;
+  }
+  _doorAdd(axis, c, op, M) {
+    const w = op.b - op.a, mid = (op.a + op.b) / 2, hx = op.b - 0.16;
+    const d = this._doorNew({ axis, c, a: op.a, b: op.b });
+    const ln = (n) => (axis === 'x' ? n : -n);
+    const l = { u: op.a + 0.06, dirU: 1, len: w - 0.12, parts: [] }; d.leaves.push(l);   // dobradiça no lado oposto à maçaneta
+    const part = (geo, mat, sz, u, y, n, cast, recv) => { l.parts.push({ geo, mat, s: sz, pos: [u - l.u, y, ln(n)], cast, recv }); return l.parts[l.parts.length - 1]; };
+    part('box', M.door, [w - 0.12, 2.02, 0.05], mid, 1.01, 0, true, true);
+    for (const sd of [-1, 1]) {
+      for (const [py, ph] of [[1.5, 0.7], [0.62, 0.8]]) part('box', M.doorPanel, [w - 0.3, ph, 0.012], mid, py, sd * 0.028, false, true);   // almofadas
+      part('cyl', M.chrome, null, hx, 1.02, sd * 0.031, false, false);                                                              // roseta
+      part('box', M.chrome, [0.13, 0.02, 0.022], hx - 0.05, 1.02, sd * 0.055, false, true).lever = [hx - l.u, 1.02];               // alavanca (gira na roseta)
+    }
+    (this._doors || (this._doors = [])).push(d);
+  }
+  // Depois de toda a decoração (antes do mergeStatic): mede o que atrapalha o giro de cada porta e cria os InstancedMesh.
+  _buildDoors(scene) {
+    const D = this._doors || []; this._doorMeshes = [];
+    scene.updateMatrixWorld(true);
+    // obstáculos = móveis entre 0,12 e 2,0 m de altura (a arquitetura foi marcada com userData.arch); paredes vêm de _walls
+    const obs = [], bb = new THREE.Box3();
+    for (const top of scene.children) {
+      if (top.userData.arch) continue;
+      top.traverseVisible((o) => {
+        if (!o.isMesh || o.isInstancedMesh || o.userData.arch || o.userData.zone || o.material.isShaderMaterial || o.material.transparent || o.material.blending === THREE.AdditiveBlending) return;
+        bb.setFromObject(o);
+        if (bb.max.y < 0.12 || bb.min.y > 2.0 || bb.max.x - bb.min.x > 7 || bb.max.z - bb.min.z > 7) return;
+        obs.push([bb.min.x, bb.min.z, bb.max.x, bb.max.z]);
+      });
+    }
+    this._furnObs = obs;   // móveis (caixas na planta): o bonequinho / "Ir para…" escolhem pontos de entrada longe deles
+    if (!D.length) return;
+    const walls = (this._walls || []).map((w) => (w.axis === 'z' ? { ax: 'z', c: w.c, b: [w.c - w.t / 2, w.a0, w.c + w.t / 2, w.a1] } : { ax: 'x', c: w.c, b: [w.a0, w.c - w.t / 2, w.a1, w.c + w.t / 2] }));
+    const DEG = Math.PI / 180;
+    for (const d of D) {
+      // caixas no quadro da porta: (u0, l0, u1, l1); a parede da própria porta (mesmo eixo e c) não conta
+      const loc = (b) => (d.axis === 'x' ? [b[0], b[1] - d.c, b[2], b[3] - d.c] : [b[1], -(b[2] - d.c), b[3], -(b[0] - d.c)]);
+      const near = (b) => b[2] > d.a - 2.6 && b[0] < d.b + 2.6 && b[3] > -2.6 && b[1] < 2.6;
+      const F = obs.map(loc).filter(near), Wl = walls.filter((w) => !(w.ax === d.axis && Math.abs(w.c - d.c) < 0.02)).map((w) => loc(w.b)).filter(near);
+      const hit = (u, l, rf, rw) => { for (const b of F) if (u > b[0] - rf && u < b[2] + rf && l > b[1] - rf && l < b[3] + rf) return true; for (const b of Wl) if (u > b[0] - rw && u < b[2] + rw && l > b[1] - rw && l < b[3] + rw) return true; return false; };
+      for (const s of [-1, 1]) {
+        let ok = 0;
+        for (let a = 4; a <= 92; a += 4) {
+          const th = a * DEG; let bad = false;
+          for (const l of d.leaves) { for (let r = 0.1; r <= l.len + 1e-6 && !bad; r += 0.1) bad = hit(l.u + l.dirU * Math.cos(th) * r, s * Math.sin(th) * r, 0.05, 0.03); if (!bad) bad = hit(l.u + l.dirU * Math.cos(th) * l.len, s * Math.sin(th) * l.len, 0.05, 0.03); if (bad) break; }
+          if (bad) break; ok = th;
+        }
+        d.max[s] = ok;
+      }
+    }
+    // InstancedMesh por (geometria, material, sombra)
+    const gBox = new THREE.BoxGeometry(1, 1, 1), gRos = new THREE.CylinderGeometry(0.028, 0.028, 0.012, 14);
+    const groups = new Map(), q = new THREE.Quaternion(), qc = new THREE.Quaternion().setFromEuler(new THREE.Euler(Math.PI / 2, 0, 0)), one = new THREE.Vector3(1, 1, 1);
+    for (const d of D) for (const l of d.leaves) for (const p of l.parts) {
+      p.local = new THREE.Matrix4().compose(new THREE.Vector3(...p.pos), p.geo === 'cyl' ? qc : q, p.geo === 'cyl' ? one : new THREE.Vector3(...p.s));
+      const key = [p.geo, p.mat.uuid, p.cast ? 1 : 0, p.recv ? 1 : 0].join('|');
+      if (!groups.has(key)) groups.set(key, { p, list: [] });
+      groups.get(key).list.push([d, p]);
+    }
+    for (const { p, list } of groups.values()) {
+      const im = new THREE.InstancedMesh(p.geo === 'cyl' ? gRos : gBox, p.mat, list.length);
+      im.instanceMatrix.setUsage(THREE.DynamicDrawUsage); im.castShadow = !!p.cast; im.receiveShadow = !!p.recv; im.frustumCulled = false;
+      im.userData.noMerge = true; im.userData.owners = [];
+      list.forEach(([d, pp], i) => { pp.mesh = im; pp.idx = i; im.userData.owners.push(d); (d.meshes || (d.meshes = [])).includes(im) || d.meshes.push(im); });
+      scene.add(im); this._doorMeshes.push(im);
+    }
+    for (const d of D) this._doorApply(d);
+    for (const im of this._doorMeshes) { im.computeBoundingSphere(); im.boundingSphere.radius += 3; }
+  }
+  // posição das peças no estado atual (d.p eased 0…1 — passa um tico de 1 no "assentar" —, d.side, d.open, d.hs = maçaneta apertada 0…1)
+  _doorApply(d) {
+    const z = d.axis === 'z', base = z ? -Math.PI / 2 : 0, m1 = _dm1, m2 = _dm2, m3 = _dm3, hang = d.hs * 0.72;   // alavanca desce ~41°
+    for (const l of d.leaves) {
+      m1.makeRotationY(base - d.side * l.dirU * d.p * d.open);
+      const e = m1.elements; e[12] += z ? d.c : l.u; e[14] += z ? l.u : d.c;   // pivô no mundo
+      for (const pt of l.parts) {
+        if (pt.lever && hang > 0.001) {
+          // alavanca: gira em torno da roseta (eixo = normal da folha), como se a mão a apertasse
+          const cs = Math.cos(hang), sn = Math.sin(hang), px = pt.lever[0], py = pt.lever[1];
+          m2.makeRotationZ(hang); const f = m2.elements; f[12] = px - cs * px + sn * py; f[13] = py - sn * px - cs * py;
+          m2.multiply(pt.local); m3.multiplyMatrices(m1, m2);
+        } else m3.multiplyMatrices(m1, pt.local);
+        pt.mesh.setMatrixAt(pt.idx, m3);
+      }
+    }
+    for (const im of d.meshes) im.instanceMatrix.needsUpdate = true;
+  }
+  // curva do giro (q = tempo 0…1 → ângulo 0…1): abre em S até 72% do tempo, passa ~4% do batente e assenta; fecha em S suave
+  _doorEase(d, q) {
+    if (q <= 0) return 0;
+    if (d.target) {
+      if (q >= 1) return 1; const x = q / 0.72; if (x < 1) return x * x * (3 - 2 * x);
+      const y = Math.sin(Math.PI * (q - 0.72) / 0.28); return 1 + 0.04 * y * y;
+    }
+    return q * q * (3 - 2 * q);
+  }
+  // lado para onde a folha gira (para longe da pessoa, se couber) e quanto abre
+  _doorSide(d) {
+    const lp = d.axis === 'x' ? d.n : -d.n;   // lateral da pessoa no quadro da folha
+    let s = Math.abs(lp) < 0.12 ? d.side : lp > 0 ? -1 : 1;
+    const o = -s;
+    if (d.max[s] < 0.87 && d.max[o] > d.max[s] + 0.1) s = o;   // móvel/parede atrapalha desse lado: abre para o outro
+    d.side = s; d.open = Math.max(d.max[s], 0.35);
+  }
+  // Pessoa → portas: abre a mais "de frente" a ~1,6 m do vão (2,1 m correndo), mantém aberta enquanto está por perto e fecha
+  // 2,5 s depois que ela se afasta. Devolve true enquanto alguma porta se move (só então o cartão pede quadros).
+  _doorsTick(dt) {
+    const D = this._doors, w = this._walk; if (!D || !D.length || !w) return false;
+    const px = w.pos.x, pz = w.pos.z, fx = -Math.sin(w.yaw), fz = -Math.cos(w.yaw), now = performance.now();
+    const R = 1.6 + (Math.hypot(w.vel.x, w.vel.z) > 2.4 ? 0.5 : 0);
+    let best = null, bs = 1e9, moving = false;
+    for (const d of D) {
+      const u = d.axis === 'x' ? px : pz, n = (d.axis === 'x' ? pz : px) - d.c, du = Math.max(d.a - u, u - d.b, 0);
+      d.du = du; d.n = n; d.dist = Math.hypot(du, n);
+      if (d.suppress && d.dist > R + 0.6) d.suppress = false;
+      if (d.suppress || du > 0.6 || Math.abs(n) > R || d.dist > R) continue;
+      const mx = d.mx - px, mz = d.mz - pz, cs = (fx * mx + fz * mz) / (Math.hypot(mx, mz) || 1);
+      if (cs < 0.35 && d.dist > 0.9) continue;   // só a que está de frente (ou colada nela)
+      const sc = d.dist + (1 - cs) * 0.8;
+      if (sc < bs) { bs = sc; best = d; }
+    }
+    for (const d of D) {
+      const want = !d.suppress && (d === best || d.hold > now || (d.target === 1 && d.dist < 2.2 && d.du < 0.9));
+      if (want) {
+        d.awayAt = 0;
+        if (!d.target) { d.target = 1; if (d.q < 0.001) this._doorSide(d); }
+      } else if (d.target) {
+        if (!d.awayAt) d.awayAt = now; else if (now - d.awayAt > 2500) { d.target = 0; d.awayAt = 0; }
+      }
+      // maçaneta: a "mão" aperta antes de a folha sair do batente e solta logo que ela anda; ao fechar aperta de novo perto do batente
+      const lev = d.lever && !this._reduced;
+      const wantH = lev ? (d.target ? (d.q < 0.13 ? 1 : 0) : (d.q > 0 && d.q < 0.1 ? 1 : 0)) : 0;
+      if (d.q !== d.target || d.hs !== wantH) {
+        const dur = 1.05;
+        if (this._reduced) { d.q = d.target; d.hs = 0; }
+        else {
+          if (!(d.target && lev && d.q < 0.02 && d.hs < 0.97)) d.q = d.target ? Math.min(1, d.q + dt / dur) : Math.max(0, d.q - dt / (dur * 0.9));   // espera a maçaneta descer
+          if (d.hs !== wantH) { const r = dt / (wantH > d.hs ? 0.14 : 0.26); d.hs = wantH > d.hs ? Math.min(wantH, d.hs + r) : Math.max(wantH, d.hs - r); }
+        }
+        d.p = this._doorEase(d, d.q);
+        d.moving = moving = true; this._doorApply(d);
+      } else if (d.moving) {
+        d.moving = false; moving = true; this._needShadow = true;   // acabou de assentar: um último quadro + sombras refeitas uma vez
+      }
+    }
+    return moving;
+  }
+  // toque/clique/Enter: alterna a porta (aberta → fecha e não reabre até a pessoa se afastar; fechada → abre e segura 6 s)
+  _doorToggle(d) {
+    const now = performance.now();
+    if (d.target) { if (d.dist < 0.6) return; d.target = 0; d.hold = 0; d.suppress = true; d.awayAt = 0; }
+    else { d.suppress = false; if (d.q < 0.001) this._doorSide(d); d.target = 1; d.hold = now + 6000; d.awayAt = 0; }
+    this._orbit.dirty = true;
+  }
+  // Enter/F: a porta mais perto e à frente (até ~2,4 m)
+  _doorInteract() {
+    const D = this._doors, w = this._walk; if (!D || !w) return false;
+    const fx = -Math.sin(w.yaw), fz = -Math.cos(w.yaw); let best = null, bs = 1e9;
+    for (const d of D) {
+      const mx = d.mx - w.pos.x, mz = d.mz - w.pos.z, cs = (fx * mx + fz * mz) / (Math.hypot(mx, mz) || 1);
+      if (d.dist > 2.4 || (cs < 0.2 && d.dist > 0.9)) continue;
+      const sc = d.dist + (1 - cs) * 0.8; if (sc < bs) { bs = sc; best = d; }
+    }
+    if (best) this._doorToggle(best);
+    return !!best;
+  }
+  // ao sair da visão de pessoa: tudo fechado na hora (a maquete mostra as portas fechadas, como sempre)
+  _doorsReset() {
+    let any = false;
+    for (const d of this._doors || []) {
+      if (d.q === 0 && d.target === 0 && !d.moving) continue;
+      any = true; d.q = d.p = d.hs = d.target = 0; d.hold = 0; d.awayAt = 0; d.suppress = false; d.moving = false;
+      this._doorApply(d);
+    }
+    if (any) this._needShadow = true;
+  }
+  // o raio de _pickHit (já apontado) acerta uma folha de porta? { d, dist } se estiver a ≤ 3,4 m e sem parede no caminho
+  _doorHit() {
+    if (!this._doorMeshes || !this._doorMeshes.length || !this._walk) return null;
+    const cam = this._camera.position;
+    for (const h of this._raycaster.intersectObjects(this._doorMeshes, false)) {
+      if (h.distance > 3.4 || h.instanceId == null) continue;
+      if (this._segBlocked(cam.x, cam.z, h.point.x, h.point.z)) continue;
+      return { d: h.object.userData.owners[h.instanceId], dist: h.distance };
+    }
+    return null;
+  }
+  // clique/toque no modo Pessoa: a folha de uma porta abre/fecha; vence o que estiver atrás dela
+  _doorClick(hit) {
+    const dh = this._doorHit();
+    if (dh && (!hit || dh.dist <= hit.distance + 0.02)) { this._doorToggle(dh.d); return true; }
+    return false;
+  }
+  // segmento (planta) atravessa alguma parede sólida?
+  _segBlocked(x0, z0, x1, z1) {
+    for (const w of this._walls || []) {
+      const a0 = w.a0 + 0.15, a1 = w.a1 - 0.15, h = w.t / 2 - 0.01;
+      const bx0 = w.axis === 'x' ? a0 : w.c - h, bx1 = w.axis === 'x' ? a1 : w.c + h, bz0 = w.axis === 'x' ? w.c - h : a0, bz1 = w.axis === 'x' ? w.c + h : a1;
+      if (bx1 <= bx0 || bz1 <= bz0) continue;
+      let t0 = 0, t1 = 1; const dx = x1 - x0, dz = z1 - z0;
+      for (const [p, dd, lo, hi] of [[x0, dx, bx0, bx1], [z0, dz, bz0, bz1]]) {
+        if (Math.abs(dd) < 1e-9) { if (p < lo || p > hi) { t0 = 2; break; } continue; }
+        let ta = (lo - p) / dd, tb = (hi - p) / dd; if (ta > tb) [ta, tb] = [tb, ta];
+        t0 = Math.max(t0, ta); t1 = Math.min(t1, tb); if (t0 > t1) break;
+      }
+      if (t0 <= t1) return true;
+    }
+    return false;
+  }
+
+  // ---- Visão de pessoa (ver classe Walker) ----
+  // Colisão simples: cada segmento de parede (registrado em _wallSeg) vira uma caixa engordada pelo raio da pessoa; move por eixo
+  // (X e depois Z), então encostar numa parede desliza ao longo dela. Vãos de porta passam. A água da piscina também segura.
+  _walkCollide(px, pz, nx, nz) {
+    const R = 0.22, W = this._walls || [];
+    if (!this._wbox || this._wbox.length !== W.length) this._wbox = W.map((w) => w.axis === 'z' ? [w.c - w.t / 2 - R, w.a0 - R, w.c + w.t / 2 + R, w.a1 + R] : [w.a0 - R, w.c - w.t / 2 - R, w.a1 + R, w.c + w.t / 2 + R]);
+    const B = this._wbox, e = 1e-3;
+    for (let pass = 0; pass < 2; pass++) for (const [x0, z0, x1, z1] of B) if (pz > z0 && pz < z1 && nx > x0 && nx < x1) { if (px <= x0) nx = x0 - e; else if (px >= x1) nx = x1 + e; }
+    for (let pass = 0; pass < 2; pass++) for (const [x0, z0, x1, z1] of B) if (nx > x0 && nx < x1 && nz > z0 && nz < z1) { if (pz <= z0) nz = z0 - e; else if (pz >= z1) nz = z1 + e; }
+    if (inPool(nx, nz, 0.12) && !inPool(px, pz, 0.12)) { if (!inPool(nx, pz, 0.12)) nz = pz; else if (!inPool(px, nz, 0.12)) nx = px; else { nx = px; nz = pz; } }
+    return [clamp(nx, WALK.x0 + 0.25, WALK.x1 - 0.25), clamp(nz, WALK.z0 + 0.25, WALK.z1 - 0.25)];
+  }
+  // ---- Navegação por clique: grade de 0,1 m com as paredes (e a piscina) engordadas pelo raio da pessoa; A* + alisamento ----
+  _navGrid() {
+    if (this._ng) return this._ng;
+    const CS = 0.1, R = 0.26, x0 = WALK.x0, z0 = WALK.z0, nx = Math.round((WALK.x1 - WALK.x0) / CS), nz = Math.round((WALK.z1 - WALK.z0) / CS);
+    const blk = new Uint8Array(nx * nz), fur = new Uint8Array(nx * nz);
+    const fill = (a, bx0, bz0, bx1, bz1) => {
+      const i0 = Math.max(0, Math.ceil((bx0 - x0) / CS - 0.5)), i1 = Math.min(nx - 1, Math.floor((bx1 - x0) / CS - 0.5));
+      const j0 = Math.max(0, Math.ceil((bz0 - z0) / CS - 0.5)), j1 = Math.min(nz - 1, Math.floor((bz1 - z0) / CS - 0.5));
+      for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) a[j * nx + i] = 1;
+    };
+    for (const w of this._walls || []) {
+      if (w.axis === 'z') fill(blk, w.c - w.t / 2 - R, w.a0 - R, w.c + w.t / 2 + R, w.a1 + R); else fill(blk, w.a0 - R, w.c - w.t / 2 - R, w.a1 + R, w.c + w.t / 2 + R);
+    }
+    for (let j = 0; j < nz; j++) for (let i = 0; i < nx; i++) if (inPool(x0 + (i + 0.5) * CS, z0 + (j + 0.5) * CS, R)) blk[j * nx + i] = 1;
+    fill(blk, WALK.x0, WALK.z0, WALK.x1, WALK.z0 + 0.3); fill(blk, WALK.x0, WALK.z1 - 0.3, WALK.x1, WALK.z1);
+    fill(blk, WALK.x0, WALK.z0, WALK.x0 + 0.3, WALK.z1); fill(blk, WALK.x1 - 0.3, WALK.z0, WALK.x1, WALK.z1);
+    for (const b of this._furnObs || []) fill(fur, b[0] - 0.3, b[1] - 0.3, b[2] + 0.3, b[3] + 0.3);   // móveis (não travam, mas o ponto de entrada os evita)
+    return (this._ng = { CS, x0, z0, nx, nz, blk, fur });
+  }
+  _navFree(x, z, furn = true) {
+    const g = this._navGrid(), i = Math.floor((x - g.x0) / g.CS), j = Math.floor((z - g.z0) / g.CS);
+    if (i < 0 || j < 0 || i >= g.nx || j >= g.nz) return false;
+    return !g.blk[j * g.nx + i] && !(furn && g.fur[j * g.nx + i]);
+  }
+  // caminho (planta) de (sx, sz) até o ponto alcançável mais perto de (tx, tz): [[x, z], …] sem o ponto de partida
+  _navPath(sx, sz, tx, tz) {
+    const g = this._navGrid(), { CS, x0, z0, nx, nz, blk } = g, N = nx * nz;
+    const cell = (x, z) => [clamp(Math.floor((x - x0) / CS), 0, nx - 1), clamp(Math.floor((z - z0) / CS), 0, nz - 1)];
+    const free = (i, j) => i >= 0 && j >= 0 && i < nx && j < nz && !blk[j * nx + i];
+    const near = (i, j) => {
+      if (free(i, j)) return [i, j];
+      for (let r = 1; r < 40; r++) {
+        let best = null, bd = 1e9;
+        for (let dj = -r; dj <= r; dj++) for (let di = -r; di <= r; di++) {
+          if (Math.max(Math.abs(di), Math.abs(dj)) !== r || !free(i + di, j + dj)) continue;
+          const d = di * di + dj * dj; if (d < bd) { bd = d; best = [i + di, j + dj]; }
+        }
+        if (best) return best;
+      }
+      return null;
+    };
+    let [si, sj] = cell(sx, sz), [ti, tj] = cell(tx, tz);
+    const s0 = near(si, sj); if (!s0) return [[tx, tz]]; [si, sj] = s0;
+    const t0 = near(ti, tj); if (t0) [ti, tj] = t0;
+    const gs = new Float32Array(N).fill(1e9), par = new Int32Array(N).fill(-1), closed = new Uint8Array(N);
+    const hf = (i, j) => { const dx = Math.abs(i - ti), dz = Math.abs(j - tj); return dx + dz + (Math.SQRT2 - 2) * Math.min(dx, dz); };
+    const HK = [], HI = [];
+    const push = (k, idx) => { let n = HK.length; HK.push(k); HI.push(idx); while (n > 0) { const p = (n - 1) >> 1; if (HK[p] <= HK[n]) break; [HK[p], HK[n]] = [HK[n], HK[p]]; [HI[p], HI[n]] = [HI[n], HI[p]]; n = p; } };
+    const pop = () => {
+      const top = HI[0], lk = HK.pop(), li = HI.pop();
+      if (HK.length) {
+        HK[0] = lk; HI[0] = li; let n = 0;
+        for (;;) { const l = 2 * n + 1, r = l + 1; let m = n; if (l < HK.length && HK[l] < HK[m]) m = l; if (r < HK.length && HK[r] < HK[m]) m = r; if (m === n) break; [HK[m], HK[n]] = [HK[n], HK[m]]; [HI[m], HI[n]] = [HI[n], HI[m]]; n = m; }
+      }
+      return top;
+    };
+    const start = sj * nx + si, goal = tj * nx + ti; gs[start] = 0; push(hf(si, sj), start);
+    let best = start, bh = hf(si, sj), found = false;
+    const DI = [1, -1, 0, 0, 1, 1, -1, -1], DJ = [0, 0, 1, -1, 1, -1, 1, -1];
+    while (HI.length) {
+      const cur = pop(); if (closed[cur]) continue; closed[cur] = 1;
+      const ci = cur % nx, cj = (cur / nx) | 0, h = hf(ci, cj);
+      if (h < bh - 1e-6 || (Math.abs(h - bh) < 1e-6 && gs[cur] < gs[best])) { bh = h; best = cur; }
+      if (cur === goal) { found = true; break; }
+      for (let d = 0; d < 8; d++) {
+        const ni = ci + DI[d], nj = cj + DJ[d]; if (!free(ni, nj)) continue;
+        if (d > 3 && (!free(ci + DI[d], cj) || !free(ci, cj + DJ[d]))) continue;   // sem cortar quina
+        const nn = nj * nx + ni; if (closed[nn]) continue;
+        const ng = gs[cur] + (d > 3 ? 1.4142 : 1);
+        if (ng < gs[nn]) { gs[nn] = ng; par[nn] = cur; push(ng + hf(ni, nj), nn); }
+      }
+    }
+    const raw = []; for (let c = found ? goal : best; c >= 0; c = par[c]) raw.push([x0 + ((c % nx) + 0.5) * CS, z0 + (((c / nx) | 0) + 0.5) * CS]);
+    raw.reverse();
+    const blkAt = (x, z) => { const i = Math.floor((x - x0) / CS), j = Math.floor((z - z0) / CS); return i < 0 || j < 0 || i >= nx || j >= nz || blk[j * nx + i] === 1; };
+    const los = (a, b) => { const dx = b[0] - a[0], dz = b[1] - a[1], n = Math.ceil(Math.hypot(dx, dz) / 0.05); for (let k = 1; k < n; k++) if (blkAt(a[0] + dx * k / n, a[1] + dz * k / n)) return false; return true; };
+    const out = []; let cur = [sx, sz], j = 0;
+    while (j < raw.length - 1) { let k = j + 1; while (k + 1 < raw.length && los(cur, raw[k + 1])) k++; out.push(raw[k]); cur = raw[k]; j = k; }
+    if (found && !blkAt(tx, tz) && out.length) out[out.length - 1] = [tx, tz];
+    return out;
+  }
+  // ---- Raio → mundo (paredes, chão): o que está sob o cursor/dedo → { kind: 'ground'|'wall', t, x, y, z } ----
+  _pickWorld(o, d) {
+    let bt = Infinity, kind = null;
+    const hit = (t, k) => { if (t > 1e-4 && t < bt) { bt = t; kind = k; } };
+    const boxT = (x0, y0, z0, x1, y1, z1) => {   // entrada do raio na caixa (Infinity se não acerta ou se a origem está dentro)
+      let t0 = 0, t1 = Infinity;
+      for (const [p, dd, lo, hi] of [[o.x, d.x, x0, x1], [o.y, d.y, y0, y1], [o.z, d.z, z0, z1]]) {
+        if (Math.abs(dd) < 1e-9) { if (p < lo || p > hi) return Infinity; continue; }
+        let ta = (lo - p) / dd, tb = (hi - p) / dd; if (ta > tb) [ta, tb] = [tb, ta];
+        t0 = Math.max(t0, ta); t1 = Math.min(t1, tb); if (t0 > t1) return Infinity;
+      }
+      return t0 > 0 ? t0 : Infinity;
+    };
+    for (const w of this._walls || []) {
+      const h = w.h || H, hh = w.t / 2;
+      hit(w.axis === 'x' ? boxT(w.a0, 0, w.c - hh, w.a1, h, w.c + hh) : boxT(w.c - hh, 0, w.a0, w.c + hh, h, w.a1), 'wall');
+    }
+    if (d.y < -1e-9 && o.y > 0) { const t = -o.y / d.y, x = o.x + d.x * t, z = o.z + d.z * t; if (x > WALK.x0 && x < WALK.x1 && z > WALK.z0 && z < WALK.z1) hit(t, 'ground'); }
+    if (!kind) return null;
+    return { kind, t: bt, x: o.x + d.x * bt, y: o.y + d.y * bt, z: o.z + d.z * bt };
+  }
+  _rayAt(cx, cy) {
+    this._camera.updateMatrixWorld();
+    const r = this._canvas.getBoundingClientRect();
+    this._ndc.set(((cx - r.left) / r.width) * 2 - 1, -((cy - r.top) / r.height) * 2 + 1);
+    this._raycaster.setFromCamera(this._ndc, this._camera);
+    return this._raycaster.ray;
+  }
+  // destino de caminhada sob o cursor: { x, z, kind, t } (nulo no céu/teto)
+  _destAt(cx, cy) {
+    const ray = this._rayAt(cx, cy), p = this._pickWorld(ray.origin, ray.direction); if (!p) return null;
+    let x = p.x, z = p.z;
+    if (p.kind === 'wall') {   // parede: o ponto do chão em frente a ela, do lado de quem olha
+      const hl = Math.hypot(ray.direction.x, ray.direction.z) || 1;
+      x -= ray.direction.x / hl * 0.5; z -= ray.direction.z / hl * 0.5;
+    }
+    return { x: clamp(x, WALK.x0 + 0.35, WALK.x1 - 0.35), z: clamp(z, WALK.z0 + 0.35, WALK.z1 - 0.35), kind: p.kind, t: p.t, y: p.y };
+  }
+  _walkGo(d) {
+    const w = this._walk; if (!this._walkOn || !w) return false;
+    const pts = this._navPath(w.pos.x, w.pos.z, d.x, d.z); if (!pts.length) return false;
+    w.path = { pts, i: 0, t: 0, px: w.pos.x, pz: w.pos.z, goal: d, tries: 0 };
+    w.head = true; this._orbit.dirty = true;
+    const e = pts[pts.length - 1]; this._mkSet(e[0], e[1], true);
+    return true;
+  }
+  _walkReplan() {
+    const w = this._walk, P = w && w.path; if (!P) return;
+    const pts = this._navPath(w.pos.x, w.pos.z, P.goal.x, P.goal.z); if (!pts.length) { w.stop(true); return; }
+    P.pts = pts; P.i = 0; P.t = 0; P.px = w.pos.x; P.pz = w.pos.z;
+  }
+  _walkStopped() { this._mkDestOff = performance.now() + 500; this._orbit.dirty = true; }
+  // marcador discreto no piso: anel âmbar sob o cursor (hover) ou no destino (pulsa até chegar)
+  _mkSet(x, z, dest) {
+    const m = this._mk; if (!m) return;
+    m.position.set(x, 0.035, z); m.visible = true; this._mkIsDest = !!dest; m.scale.setScalar(1);
+    m.children[0].material.opacity = dest ? 0.95 : 0.7; this._mkDestOff = 0; this._orbit.dirty = true;
+  }
+  _mkHide(destToo) { if (!this._mk || (this._mkIsDest && !destToo && this._walk && this._walk.path)) return; if (this._mk.visible) { this._mk.visible = false; this._orbit.dirty = true; } }
+  _mkTick(t) {
+    const m = this._mk; if (!m || !m.visible) return false;
+    if (this._mkIsDest) {
+      if (this._mkDestOff && performance.now() > this._mkDestOff) { m.visible = false; return true; }
+      m.scale.setScalar(1 + 0.18 * Math.sin(t * 7)); return true;
+    }
+    return false;
+  }
+  _walkHover(e) {
+    const now = performance.now(); if (now - (this._hvT || 0) < 45) return; this._hvT = now;
+    const d = this._destAt(e.clientX, e.clientY);
+    this._hoverDest = d;
+    if (d) { if (!(this._mkIsDest && this._walk.path)) this._mkSet(d.x, d.z, false); } else this._mkHide();
+  }
+  // clique/toque no modo Pessoa: aparelho liga/desliga (como sempre); qualquer outro ponto do piso/parede vira caminhada
+  _walkClick(e, hit) {
+    const d = this._destAt(e.clientX, e.clientY), o = hit && hit.object;
+    if (o && o.userData.item && !o.userData.zone && !(d && d.kind === 'wall' && d.t < hit.distance - 0.05)) return false;
+    if (!d) return true;
+    this._walkGo(d);
+    return true;
+  }
+
+  // ---- Cômodos: pontos de entrada livres, para onde olhar, e o bonequinho / "Ir para…" ----
+  // marcador do destino e realce do cômodo sob o bonequinho (criados depois do mergeStatic)
+  _buildWalkAids() {
+    this._hlGeo = new THREE.PlaneGeometry(1, 1);
+    this._hlMat = new THREE.MeshBasicMaterial({ color: 0x409cff, transparent: true, opacity: 0.34, depthTest: false, depthWrite: false, toneMapped: false });   // cômodo escolhido: o mesmo azul do --focus (foco e seleção), não luz acesa
+    this._hl = new THREE.Group(); this._hl.visible = false; this._hl.userData.keep = true; this._scene.add(this._hl);
+    const mkMat = new THREE.MeshBasicMaterial({ color: 0xffc46b, transparent: true, opacity: 0.8, depthWrite: false, toneMapped: false, fog: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 });
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.15, 0.2, 40), mkMat.clone()), dot = new THREE.Mesh(new THREE.CircleGeometry(0.045, 20), mkMat);
+    ring.rotation.x = dot.rotation.x = -Math.PI / 2; ring.renderOrder = dot.renderOrder = 30;
+    this._mk = new THREE.Group(); this._mk.add(ring, dot); this._mk.visible = false; this._mk.userData.keep = true; this._scene.add(this._mk);
+    this._places = PLACES.map((b) => { const blk = { id: b.id, label: b.label, rooms: [] }; blk.rooms = b.rooms.map((r) => Object.assign({ block: blk }, r)); return blk; });
+  }
+  _roomsAll() { return (this._places || []).flatMap((b) => b.rooms); }
+  // cômodo sob (x, z) do piso; folga de 0,8 m para as paredes
+  _roomAt(x, z) {
+    let best = null, bd = 0.8;
+    for (const r of this._roomsAll()) for (const [rx, rz, w, d] of r.rects) {
+      const dist = Math.hypot(Math.max(rx - x, 0, x - rx - w), Math.max(rz - z, 0, z - rz - d));
+      if (dist === 0) return r;
+      if (dist < bd) { bd = dist; best = r; }
+    }
+    return best;
+  }
+  _roomBox(r) { const rs = r.rects; return [Math.min(...rs.map((q) => q[0])), Math.min(...rs.map((q) => q[1])), Math.max(...rs.map((q) => q[0] + q[2])), Math.max(...rs.map((q) => q[1] + q[3]))]; }
+  // ponto livre (sem parede, sem móvel) do cômodo mais perto de `want` (padrão: o centro do cômodo)
+  _roomSpot(r, want) {
+    const b = this._roomBox(r), w = want || [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2];
+    for (const furn of [true, false]) {   // cômodo cheio: aceita móvel, só não parede
+      let best = null, bd = 1e9;
+      for (const [rx, rz, rw, rd] of r.rects) for (let z = rz + 0.05; z < rz + rd; z += 0.1) for (let x = rx + 0.05; x < rx + rw; x += 0.1) {
+        if (!this._navFree(x, z, furn)) continue;
+        const d = Math.hypot(x - w[0], z - w[1]); if (d < bd) { bd = d; best = { x, z }; }
+      }
+      if (best) return best;
+    }
+    return { x: (b[0] + b[2]) / 2, z: (b[1] + b[3]) / 2 };
+  }
+  // para onde olhar ao entrar: o rumo com a vista mais longa (quem entra enxerga o ambiente), com um leve gosto pelo centro do cômodo
+  _roomYaw(r, x, z) {
+    const b = this._roomBox(r), cx = (b[0] + b[2]) / 2, cz = (b[1] + b[3]) / 2, ac = Math.atan2(-(cx - x), -(cz - z)), far = Math.hypot(cx - x, cz - z) > 0.6;
+    let best = -1e9, ba = 0;
+    for (let k = 0; k < 24; k++) {
+      const a = k * Math.PI / 12, dx = -Math.sin(a), dz = -Math.cos(a); let d = 0;
+      while (d < 14 && this._navFree(x + dx * d, z + dz * d, false)) d += 0.2;
+      const sc = d + (far ? 1.2 * Math.cos(a - ac) : 0); if (sc > best) { best = sc; ba = a; }
+    }
+    return ba;
+  }
+  // ponto de entrada perto de (x, z) dentro do cômodo r (o próprio ponto se estiver livre)
+  _dropSpot(r, x, z) {
+    if (this._navFree(x, z) && this._roomAt(x, z) === r) return { x, z };
+    return this._roomSpot(r, [x, z]);
+  }
+  _fade() {
+    const el = this._fadeEl; if (!el || this._reduced) return;
+    el.style.transition = 'none'; el.style.opacity = '0.9'; void el.offsetWidth; el.style.transition = 'opacity .55s ease-out'; el.style.opacity = '0';
+  }
+  // entra (ou, já andando, teleporta) no ponto — a 1,6 m, olhando para `yaw`
+  _enterAt(sp, yaw) {
+    this._fade(); this._closeGoto();
+    this._setWalk(true);
+    this._walk.reset(sp.x, sp.z, yaw, 0); this._mkHide(true);
+    this._orbit.dirty = true;
+  }
+  _enterRoom(r, at) {
+    if (!r) return false;
+    const sp = at ? this._dropSpot(r, at[0], at[1]) : this._roomSpot(r);
+    this._enterAt(sp, this._roomYaw(r, sp.x, sp.z)); return true;
+  }
+  // realce azul (seleção) dos retângulos [x0, z0, x1, z1] do cômodo sob o bonequinho (desenhado por cima, sem teste de profundidade)
+  // v1.10.2: sem realce azul nenhum (nem no passar do mouse na Vista de cima, nem ao arrastar a Pessoa) — pedido do dono
+  _hlShow() { if (this._hl) this._hl.visible = false; }
+  // Bonequinho (estilo Street View): arrastar até um ponto do piso da maquete e soltar → entra na visão de Pessoa ali
+  _pegBind(btn) {
+    let st = null;
+    const pt = (e) => ({ x: e.clientX, y: e.clientY - (e.pointerType === 'touch' ? 56 : 0) });   // no toque a mira fica acima do dedo
+    btn.addEventListener('pointerdown', (e) => {
+      this._dicaOff();
+      if (e.button > 0 || this._walkOn) return;
+      st = { id: e.pointerId, x0: e.clientX, y0: e.clientY, live: false }; try { btn.setPointerCapture(e.pointerId); } catch (_) {}
+      e.preventDefault();
+    });
+    btn.addEventListener('pointermove', (e) => {
+      if (!st || e.pointerId !== st.id) return;
+      if (!st.live && Math.hypot(e.clientX - st.x0, e.clientY - st.y0) < 6) return;
+      st.live = true; this._pegMove(pt(e));
+    });
+    const end = (e) => {
+      if (!st || e.pointerId !== st.id) return;
+      const s = st; st = null; try { btn.releasePointerCapture(e.pointerId); } catch (_) {}
+      if (!s.live) { if (e.type === 'pointerup') this._toggleGoto(); return; }
+      this._pegDrop(e.type === 'pointerup' ? pt(e) : null);
+    };
+    btn.addEventListener('pointerup', end); btn.addEventListener('pointercancel', end);
+    btn.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); this._dicaOff(); this._toggleGoto(); } });
+  }
+  _dicaOff() {
+    if (!this._dica) return; this._dica.remove(); this._dica = null;
+    try { window.localStorage.setItem('casa3d.dica_pessoa', '1'); } catch (_) {}
+  }
+  _pegAt(p) {
+    const el = this.shadowRoot.elementFromPoint(p.x, p.y);
+    if (el !== this._canvas) return null;
+    const d = this._destAt(p.x, p.y); if (!d) return null;
+    const r = this._roomAt(d.x, d.z); if (!r) return null;
+    return { d, r };
+  }
+  _pegMove(p) {
+    const g = this._pegGhost, tip = this._pegTip, wr = this._wrap.getBoundingClientRect();
+    g.hidden = false; g.style.transform = `translate(${p.x - wr.left - 22}px, ${p.y - wr.top - 44}px)`;
+    const hit = this._pegAt(p);
+    if (hit) {
+      this._hlShow(hit.r.rects.map(([x, z, w, d]) => [x, z, x + w, z + d]));
+      tip.hidden = false; tip.textContent = hit.r.label; tip.style.transform = `translate(${p.x - wr.left + 26}px, ${p.y - wr.top - 30}px)`;
+      g.classList.add('ok');
+    } else { this._hlShow(null); tip.hidden = true; g.classList.remove('ok'); }
+    this._orbit.dirty = true;
+  }
+  _pegDrop(p) {
+    const sel = p ? this._pegAt(p) : null;   // soltar fora do piso (sobre os painéis, fora do lote) ou cancelar o gesto: nada acontece
+    this._pegGhost.hidden = true; this._pegTip.hidden = true; this._hlShow(null); this._orbit.dirty = true;
+    if (sel) this._enterRoom(sel.r, [sel.d.x, sel.d.z]);
+  }
+  // "Ir para…": lista de cômodos por área — teleporte suave até um ponto livre do cômodo
+  _buildGoto() {
+    const box = this._gotoPanel; box.innerHTML = '';
+    const hd = document.createElement('div'); hd.className = 'gh'; hd.textContent = 'Ir para…'; box.appendChild(hd);
+    for (const b of this._places || []) {
+      const sec = document.createElement('div'); sec.className = 'gsec'; const t = document.createElement('div'); t.className = 'gt'; t.textContent = b.label; sec.appendChild(t);
+      const row = document.createElement('div'); row.className = 'grow';
+      for (const r of b.rooms) { const c = document.createElement('button'); c.textContent = r.label; c.dataset.room = r.id; c.addEventListener('click', () => this._enterRoom(r)); row.appendChild(c); }
+      sec.appendChild(row); box.appendChild(sec);
+    }
+  }
+  _toggleGoto(force) {
+    const box = this._gotoPanel; if (!box) return;
+    const open = force != null ? force : box.hidden;
+    if (open && !box.dataset.built) { this._buildGoto(); box.dataset.built = '1'; }
+    if (open) { this._toggleMenu(false); if (this._panelOpen && this._sideOverlay) this._setPanel(false); }   // no celular a gaveta cobriria a lista
+    box.hidden = !open; this._gotoBtn.setAttribute('aria-pressed', open ? 'true' : 'false'); this._pegBtn.setAttribute('aria-pressed', open && !this._walkOn ? 'true' : 'false');
+  }
+  _closeGoto() { if (this._gotoPanel && !this._gotoPanel.hidden) this._toggleGoto(false); }
+  // Menu de opções (v1.5): abre/fecha no botão; fecha com Esc, clique fora e depois de ações de um disparo. ↑/↓/Home/End andam entre os itens.
+  _menuBind() {
+    this._menuOut = (e) => { const p = e.composedPath(); if (!p.includes(this._menu) && !p.includes(this._menuBtn)) this._toggleMenu(false); };
+    this._menuEsc = (e) => { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); this._toggleMenu(false); this._menuBtn.focus(); } };
+    this._menu.addEventListener('keydown', (e) => {
+      const its = [...this._menu.querySelectorAll('button')].filter((b) => !b.disabled && b.offsetParent);
+      const i = its.indexOf(this.shadowRoot.activeElement);
+      const j = e.key === 'ArrowDown' ? i + 1 : e.key === 'ArrowUp' ? i - 1 : e.key === 'Home' ? 0 : e.key === 'End' ? its.length - 1 : null;
+      if (j == null || !its.length) return;
+      e.preventDefault(); its[(j + its.length) % its.length].focus();
+    });
+  }
+  _toggleMenu(open, kbd) {
+    const m = this._menu; if (!m) return;
+    const was = this._menuBtn.getAttribute('aria-expanded') === 'true'; open = open != null ? !!open : !was;
+    if (open === was) return;
+    clearTimeout(this._menuT); m.classList.toggle('out', !open); this._menuBtn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) m.hidden = false; else this._menuT = setTimeout(() => { m.hidden = true; }, this._reduced ? 0 : 150);   // sai encolhendo para o ☰
+    if (open) {
+      this._closeGoto(); this._placeMenu();
+      document.addEventListener('pointerdown', this._menuOut, true); document.addEventListener('keydown', this._menuEsc, true);
+      if (kbd) { const f = m.querySelector('button:not(:disabled)'); if (f) f.focus(); }
+    } else { document.removeEventListener('pointerdown', this._menuOut, true); document.removeEventListener('keydown', this._menuEsc, true); }
+  }
+  // o menu desce do botão; se o título invadir a faixa dele (telas estreitas), desce abaixo do título
+  _placeMenu() {
+    const m = this._menu; if (!m || m.hidden) return;
+    const wr = this._wrap.getBoundingClientRect(), tr = this._titleCard.getBoundingClientRect(), br = this._btnsEl.getBoundingClientRect();
+    const mw = Math.min(250, wr.width - 20);   // 250 pt também no celular, ancorado no ☰
+    const top = Math.round((tr.right > wr.right - 10 - mw - 6 ? Math.max(tr.bottom, br.bottom) : br.bottom) - wr.top + 6);
+    m.style.top = `${top}px`; m.style.maxHeight = `${Math.max(160, wr.height - top - 10)}px`;
+  }
+  // mede o topo e posiciona a coluna lateral (à esquerda): largura (--side-w) e topo (--side-top) logo abaixo do título — ou dos botões,
+  // se eles invadirem a faixa da coluna; no celular (gaveta por cima) abaixo do cabeçalho inteiro
+  _layoutHud(w) {
+    if (!this._titleCard || !this._wrap) return;
+    this._narrow = typeof matchMedia === 'function' && matchMedia('(max-width: 640px)').matches;   // mesmo corte do CSS
+    const bk = this._backBtn, cut = (e) => e.scrollWidth > e.clientWidth + 1 || e.offsetHeight > 30; bk.classList.remove('compact');   // celular: se o título não cabe numa linha, o "‹ Área externa" vira só "‹" (como a barra do iOS)
+    if (this._narrow && !bk.hidden && (cut(this._titleEl) || cut(this._subEl.parentNode))) bk.classList.add('compact');
+    const wr = this._wrap.getBoundingClientRect(), tr = this._titleCard.getBoundingClientRect(), br = this._btnsEl.getBoundingClientRect();
+    const sheet = this._narrow || (w < 1024 && this.clientHeight > w * 1.1);   // folha de baixo: celular e tablet em pé (tamanho do cartão, não da janela)
+    if (sheet !== this._sheet) {   // girou o tablet: troca folha ↔ coluna sem herdar o deslocamento do outro eixo
+      this._sheet = sheet; this._wrap.classList.toggle('sheet', sheet);
+      cancelAnimationFrame(this._sprRaf); this._sprRaf = 0;
+      if (this._dock) { this._dock.dataset.snap = this._room ? 'half' : 'peek'; this._sideX(sheet && this._panelOpen ? this._snaps()[this._dock.dataset.snap] : 0); }
+    }
+    if (this._dock) this._dock[sheet ? 'addEventListener' : 'removeEventListener']('wheel', this._wheel, { passive: false });   // roda não passiva só na folha: na coluna a lista rola sem esperar o JS
+    const lo = 272, hi = Math.max(lo, Math.min(480, Math.round(w * 0.42)));   // largura: 1 coluna de blocos … até 42 % do cartão
+    this._sideAuto = Math.round(clamp(Math.min(w * 0.26, 320), lo, hi));   // padrão (sem preferência / duplo clique)
+    const sw = this._sizing ? this._sideW : Math.round(clamp(this._sideUser || this._sideAuto, lo, hi));   // a lembrada, cabendo neste cartão
+    this._sideMin = lo; this._sideMax = hi;
+    if (this._sizer) { const z = this._sizer; z.setAttribute('aria-valuemin', lo); z.setAttribute('aria-valuemax', hi); z.setAttribute('aria-valuenow', sw); z.dataset.edge = sw <= lo ? 'min' : sw >= hi ? 'max' : ''; }
+    this._sideOverlay = sheet || sw + 20 > w * 0.6;   // folha, ou coluna larga demais para dividir a tela: fica por cima, sem reenquadrar
+    const hit = this._sideOverlay || br.left - wr.left < 10 + sw + 8;   // coluna à esquerda: abaixo do título (e dos botões, se invadirem a faixa)
+    const top = Math.round((hit ? Math.max(tr.bottom, br.bottom) : tr.bottom) - wr.top + 8);
+    this._sideW = sw; this._wrap.style.setProperty('--side-w', `${sw}px`); this._wrap.style.setProperty('--side-top', `${top}px`);
+    this._hudH = top;   // altura do cabeçalho (o _resize desconta no celular com a folha aberta)
+    if (this._dica) {   // celular: embaixo do cabeçalho, seta no bonequinho · desktop: à esquerda dos botões, na mesma linha
+      const pr = this._pegBtn.getBoundingClientRect(), ds = this._dica.style; this._dica.classList.toggle('lado', !this._narrow);
+      ds.top = `${Math.round(this._narrow ? Math.max(pr.bottom, tr.bottom) - wr.top + 10 : (pr.top + pr.bottom) / 2 - wr.top)}px`;
+      ds.right = `${Math.round(this._narrow ? wr.right - pr.right : wr.right - br.left + 12)}px`; ds.setProperty('--ax', `${Math.round(pr.width / 2 - 6)}px`);
+      ds.visibility = !this._narrow && !this._backBtn.hidden ? 'hidden' : '';   // desktop: só no nível casa (dentro de um cômodo a seta cairia no '‹ Casa')
+    }
+    this._placeMenu();
+  }
+  _setWalk(on) {
+    on = !!on; if (on === !!this._walkOn || !this._orbit) return;
+    const was = on && { room: this._room, nav: { ...this._nav }, snap: this._dock.dataset.snap };   // cômodo, nível da planta e altura da folha de antes: voltam ao sair
+    this._showRoom(null); if (on) this._dicaOff();
+    const o = this._orbit, cam = this._camera, cv = this._canvas;
+    if (on) {
+      const top = this._topView ? this._topSaved || {} : null; if (top) { this._topSaved = null; this._setTopView(false, true); }   // sai da planta sem religar o telhado; volta a ela ao sair
+      this._walkSaved = { ...was, pos: cam.position.clone(), target: o.target.clone(), panel: this._panelOpen, touched: o.touched, roof: !!this._roofOn, top };
+      // na visão de Pessoa o Telhado liga sozinho (forro por dentro, sem céu sobre os cômodos); ao sair volta como estava
+      if (this._config.telhado_pessoa !== false && !this._roofOn) this._setRoof(true);
+      if (this._panelOpen) this._setPanel(false);   // vista inteira para andar (no celular a gaveta cobriria o joystick); volta ao sair
+      o.enabled = false; o.touched = true;
+      if (!this._walk) { this._walk = new Walker(this, cam, cv); this._walk.reset(6.1, 15.2); }
+      this._walkOn = true; this._walk.enable();
+      cam.near = 0.15; cam.fov = this._walkFov(); cam.updateProjectionMatrix();
+      cv.classList.add('walk'); try { cv.focus({ preventScroll: true }); } catch (_) {}
+      this._joy.hidden = false; this._showWalkHint();
+      this._pegBtn.hidden = true; this._gotoBtn.hidden = false; this._closeGoto();
+    } else {
+      this._walk.disable(); this._walk.path = null; this._walkOn = false; o.enabled = true;
+      this._doorsReset(); this._mkHide(true); this._closeGoto(); this._pegBtn.hidden = false; this._gotoBtn.hidden = true;
+      cam.near = 0.1; cam.fov = 42; cam.updateProjectionMatrix();
+      cv.classList.remove('walk'); this._joy.hidden = true; this._walkHint.classList.remove('show');
+      const sv = this._walkSaved;
+      // volta voando da altura dos olhos até onde a câmera estava antes
+      o.sph.setFromVector3(cam.position.clone().sub(o.target)); o.goal.copy(o.sph);
+      this._flyCam(sv.pos, sv.target, 3.2);
+      o.touched = sv.touched;
+      if (this._config.telhado_pessoa !== false && !!this._roofOn !== sv.roof) this._setRoof(sv.roof);
+      if (sv.top) { this._setTopView(true); this._topSaved = sv.top; }
+      if (sv.nav.level) this._navTo(sv.nav.level, sv.nav.block, sv.nav.room);   // o nível da planta de antes
+      if (sv.panel) { if (sv.room) this._showRoom(sv.room); this._setPanel(true, sv.snap); }   // o cômodo e a altura da folha de antes
+      else if (this._panelOpen) { this._dock.hidden = true; this._setPanel(false); }   // estava recolhido: o _navTo do cômodo o abriu; fecha de novo sem a animação de saída
+    }
+    this._setLabels(this._labelsOn);   // rótulos (desenhados por cima de tudo) somem dentro da casa
+    this._walkBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    o.dirty = true;
+  }
+  // campo de visão de quem anda: mais aberto que o da maquete (42°), e ainda mais em telas em pé
+  _walkFov() { return this._camera.aspect < 1 ? 80 : 66; }
+  _showWalkHint() {
+    const h = this._walkHint, coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+    h.textContent = coarse ? 'Toque no piso para ir até lá · joystick anda · arraste para olhar' : 'Clique no piso para ir até lá · setas/WASD ou joystick andam · arraste para olhar · Shift corre · Enter/F abre a porta · Esc sai';
+    h.classList.add('show');   // some no primeiro passo / gesto (_frame), não por tempo
+  }
+
+  // ---- Vista de cima navegável (v1.6): planta inteira (inclinada, vista do quintal) → área de PLACES → cômodo (reto de cima) ----
+  // Sem telhado (volta como estava ao sair). O painel lateral fica como está; no nível cômodo ele mostra o cômodo (v1.6.1).
+  _setTopView(on, keepCamera = false) {
+    on = !!on;
+    if (on && this._walkOn) this._setWalk(false);
+    const was = this._topView;
+    if (on && !was) this._topSaved = { roof: !!this._roofOn };
+    this._topView = on; this._nav = { level: 0, block: null, room: null }; this._hoverKey = ''; this._backBtn.hidden = true; this._showRoom(null); this._setLabels(this._labelsOn);
+    this._topBtn.setAttribute('aria-pressed', on ? 'true' : 'false');
+    if (on) { if (this._roofOn) this._setRoof(false); }
+    else if (was && this._topSaved) { const sv = this._topSaved; this._topSaved = null; if (sv.roof) this._setRoof(true); }
+    this._resize();
+    if (!keepCamera) this._resetView(true);
+  }
+  _navTo(level, block, room) {
+    const n = this._nav = { level: block ? (room ? 2 : 1) : 0, block: block || null, room: (block && room) || null }, b = this._backBtn, up = n.room ? n.block.label : 'Planta';
+    b.hidden = !n.level; b.innerHTML = `${iconSvg('chevl')}<span>${up}</span>`; b.setAttribute('aria-label', `Voltar para ${up}`);
+    this._hoverKey = ''; this._showRoom(n.room);   // cômodo: o painel lateral mostra ele · planta/área: visão geral
+    this._setLabels(this._labelsOn); this._resize(); this._resetView(true);
+  }
+  // Voltar (botão, Esc, Backspace): cômodo → área → planta → sai da Vista de cima
+  _navBack() {
+    const n = this._nav; if (!this._topView) return;
+    if (n.level === 0) this._setTopView(false); else if (n.level === 1) this._navTo(0); else this._navTo(1, n.block);
+  }
+  // cômodo sob o mouse/toque: o piso atingido; parede vista de fora conta para o cômodo atrás dela (com a câmera inclinada, a parede
+  // da varanda/dos quartos esconde parte do piso deles — quem toca na fachada quer o cômodo dela, não o quintal da frente)
+  _topRoom(e) {
+    const ray = this._rayAt(e.clientX, e.clientY), d = ray.direction, p = this._pickWorld(ray.origin, d); if (!p) return null;
+    const k = p.kind === 'wall' ? 0.5 / (Math.hypot(d.x, d.z) || 1) : 0;
+    return this._roomAt(p.x + d.x * k, p.z + d.z * k);
+  }
+  // 1º toque aproxima a área, 2º o cômodo; dentro do cômodo o aparelho dele alterna e o resto é o toque de sempre — salvo noutro cômodo
+  _topClick(e, hit) {
+    const n = this._nav, r = this._topRoom(e), o = hit && hit.object, k = o && !o.userData.zone && o.userData.item;
+    if (n.level === 2 && k && this._roomKeys(n.room).includes(k)) { this._toggleItem(k); this._flashRow(k); return true; }   // v1.8.1: no cômodo, o aparelho dele alterna com 1 toque (como a Igreja)
+    if (n.level === 2 && (!r || r === n.room)) return false;
+    if (r) { if (n.level === 0 || r.block !== n.block) { this._navTo(1, r.block); this._showRoom(r); } else this._navTo(2, r.block, r); }   // 1º toque: aproxima a área e já abre o cômodo
+    else this._showRoom(null);   // vazio da planta: painel volta ao geral
+    return true;
+  }
+  // aparelhos do cômodo: o grupo do painel lateral com o nome dele ("Varanda / Jardim" serve à Varanda e ao Jardim) + luminárias dentro dele
+  _roomKeys(r) {
+    if (r.keys) return r.keys;
+    const keys = new Set(), inside = (x, z) => r.rects.some(([rx, rz, w, d]) => x >= rx && x <= rx + w && z >= rz && z <= rz + d);
+    for (const z of this._zones || []) if (z.title === r.label || z.title.split(' / ').includes(r.label)) z.keys.forEach((k) => keys.add(k));
+    for (const it of ITEMS) if ((it.fixtures || []).some((f) => inside(f.p[0], f.p[2]))) keys.add(it.key);
+    for (const z of Object.values(ZONES)) if (z.item && inside(z.x + z.w / 2, z.z + z.d / 2)) keys.add(z.item);   // piso que a luz cobre (o pátio → Quintal)
+    return (r.keys = [...keys]);
+  }
+  // automações do HA do cômodo pelo nome: palavras (sem acento, ≥ 3 letras) do cômodo e dos aparelhos dele no friendly_name ("Botão quarto 1" → Quarto).
+  // Palavra de aparelho presente em mais de um grupo do painel (ex.: "LED") não conta; cômodo sem aparelho não tem automação.
+  _roomAutos(r) {
+    const keys = this._roomKeys(r); if (!keys.length) return [];
+    const words = (t) => t.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().match(/[a-z0-9]{3,}/g) || [];
+    const lw = (k) => words(ITEMS.find((i) => i.key === k).label);
+    const shared = (w) => this._zones.filter((z) => z.keys.some((k) => lw(k).includes(w))).length > 1;
+    const ws = new Set([...words(r.label), ...keys.flatMap(lw).filter((w) => !shared(w))]);
+    return this._autos.filter((a) => words(a.name).some((w) => ws.has(w)));
+  }
+  // "Ligar tudo" acende luzes e interruptores; "Desligar tudo" desliga também o ar e a TV (ligar ar/TV sem escolher modo seria surpresa; desligar é seguro)
+  _allSet(keys, on) {
+    const ctx = this._sceneCtx();
+    for (const k of keys) { const kind = ITEMS.find((i) => i.key === k).kind; if (kind !== 'sensor' && (!on || kind === 'light' || kind === 'switch')) ctx[on ? 'on' : 'off'](k); }
+  }
+  // interruptor "tudo" (v1.9, bloco e cômodo): ligado se algum aparelho controlável do grupo está; tocar ligado desliga tudo, desligado liga tudo.
+  // Vira na hora (como o UISwitch) e segura a posição pedida até o HA concordar (no máx. 2 s): sem pisca enquanto ele confirma aparelho por aparelho
+  _swFlip(sw, keys) {
+    const on = sw.getAttribute('aria-checked') !== 'true'; sw.setAttribute('aria-checked', String(on)); sw.dataset.hold = performance.now() + 2000;
+    clearTimeout(this._swT); this._swT = setTimeout(() => this._renderPanel(), 2050); this._allSet(keys, on);   // o HA não confirmou (aparelho fora do ar): volta ao real
+  }
+  _swSet(sw, n, on) {
+    sw.hidden = sw.previousSibling.hidden = !n; if (+sw.dataset.hold > performance.now() && (sw.getAttribute('aria-checked') === 'true') !== on) return;
+    delete sw.dataset.hold; sw.setAttribute('aria-checked', String(on)); sw.title = on ? 'Desligar tudo' : 'Ligar tudo';
+    if (sw.classList.contains('still')) requestAnimationFrame(() => sw.classList.remove('still'));   // 1º desenho (e troca de cômodo) sem deslize
+  }
+  // ---- Ganchos públicos (depuração / demo) ----
+  // setWalk(true|false) entra/sai da visão de pessoa · setWalkPose(x, z, yaw, pitch) posiciona a pessoa na hora (sem colisão; yaw 0 olha
+  // para −z, + vira à esquerda) · getWalkPose() → { x, y, z, yaw, pitch, walking } · enterRoom('sala') · walkTo(x, z)
+  setWalk(on) { this._setWalk(!!on); }
+  setWalkPose(x, z, yaw = 0, pitch = 0) { this._setWalk(true); this._walk.reset(x, z, yaw, pitch); this._orbit.dirty = true; }
+  getWalkPose() { const w = this._walk; return w ? { x: w.pos.x, y: w.pos.y, z: w.pos.z, yaw: w.yaw, pitch: w.pitch, walking: !!w.path } : null; }
+  enterRoom(id, x, z) { const r = this._roomsAll().find((q) => q.id === id); return this._enterRoom(r, x != null ? [x, z] : null); }
+  walkTo(x, z) { return this._walkGo({ x, z }); }
+
+
+  // ---- Ações ----
+  _activate(key) {
+    const it = ITEMS.find((i) => i.key === key); if (!it) return;
+    const eid = this.entity(key);
+    const hass = this._hass;
+    if (it.kind === 'light' || it.kind === 'switch') {
+      // Otimista: acende já, o HA confirma em seguida
+      const st = this._state[key] || { on: false, attrs: {} };
+      if (!st.unavailable) this._setItemState(key, { state: st.on ? 'off' : 'on', attrs: st.attrs });
+      this._refreshSub(); this._renderPanel();
+      if (hass && hass.callService) hass.callService('homeassistant', 'toggle', { entity_id: eid });
+    } else {
+      this.dispatchEvent(new CustomEvent('hass-more-info', { detail: { entityId: eid }, bubbles: true, composed: true }));
+    }
+    this._lastSig = '';
+  }
+
+  _pick(e) { const h = this._pickHit(e); return h ? h.object : null; }
+  _pickHit(e) {
+    const r = this._canvas.getBoundingClientRect();
+    this._ndc.set(((e.clientX - r.left) / r.width) * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+    this._raycaster.setFromCamera(this._ndc, this._camera);
+    const hits = this._raycaster.intersectObjects(this._clickables, false);
+    return hits.length ? hits[0] : null;
+  }
+  _onClick(e) {
+    const hit = this._pickHit(e);
+    this._hoverCardHide();
+    if (this._topView && this._topClick(e, hit)) return;
+    if (this._walkOn && (this._doorClick(hit) || this._walkClick(e, hit))) return this._select(null);   // folha da porta abre/fecha · piso/parede: caminha até lá
+    // tocar abre o cômodo (o do aparelho, com o bloco dele destacado) no painel lateral; vazio volta à visão geral. Aparelho (v1.8.1, como a
+    // Igreja): o 1º toque seleciona (realce + balão com a ação), o 2º no mesmo em até 5 s executa; piso, vazio ou outro aparelho tiram o balão
+    this._hoverCardHide();
+    const t = this._tapRoom(e, hit), s = this._sel;
+    if (t && t.key && !this._topView) {
+      if (s && s.key === t.key && performance.now() - s.at < 5000) return this._selAct();
+      this._focusRoom(t.r); this._showRoom(t.r, t.key, true); return this._select({ key: t.key, room: t.r.label, p: hit.point.clone(), at: performance.now() });   // o painel não abre nem muda de altura: o aparelho fica sob o dedo
+    }
+    this._select(null);
+    if (t) { this._focusRoom(t.r); this._showRoom(t.r, t.key); } else if (!this._topView) this._showRoom(null);
+  }
+  // Noite: ao tocar num cômodo a câmera aproxima e gira suave até ele (o painel abre pelo _showRoom); ao voltar à visão geral, ela volta ao quadro de casa
+  _focusRoom(r) {
+    if (!r || !this._orbit || this._topView || this._walkOn || r === this._focused) return;
+    const b = this._roomBox(r), cx = (b[0] + b[2]) / 2, cz = (b[1] + b[3]) / 2, size = Math.max(b[2] - b[0], b[3] - b[1]);
+    const target = new THREE.Vector3(cx, 0.6, cz), cam = this._camera.position;
+    const dir = new THREE.Vector3(cam.x - cx, 0, cam.z - cz); if (dir.lengthSq() < 1e-4) dir.set(0.1, 0, 1); dir.normalize();
+    const dist = this._maq ? Math.max(11.5, Math.min(15, size * 1.1 + 6.5)) * 1.5 : Math.min(18, Math.max(13, size * 1.3 + 8));   // perto o bastante para ler o cômodo, longe o bastante para ver o entorno
+    const pos = target.clone().addScaledVector(dir, dist * 0.62); pos.y = dist * 0.78;
+    this._focused = r; this._flyCam(pos, target, 2.4); this._orbit.touched = true;   // touched: o reenquadre do painel não leva a câmera de volta ao home
+  }
+  _unfocus() {
+    this._focused = null;
+    if (this._orbit && !this._topView && !this._walkOn) { this._orbit.touched = false; this._resetView(true); }
+  }
+  // auto-rotação da vista geral: só com a cena parada, sem cômodo/painel, fora da Pessoa e da Vista de cima, e sem reduced-motion
+  _autoOrbitOk() { return !this._reduced && !this._room && !this._focused && !this._walkOn && !this._topView && !document.hidden; }
+  _select(sel) {
+    const b = this._selEl; if (!b) return;
+    if (!sel && b.contains(this.shadowRoot.activeElement)) this._canvas.focus({ preventScroll: true });   // o foco no botão do balão volta à maquete
+    const band = this._selBand; this._selGone = sel ? null : this._sel || this._selGone; this._sel = sel; this._selTxt = ''; clearTimeout(this._selT); b.classList.toggle('out', !sel);   // _selGone: saindo, o balão segue preso ao ponto
+    if (sel) b.hidden = false; else if (!b.hidden) this._selT = setTimeout(() => { b.hidden = true; this._selGone = null; }, this._reduced ? 0 : 150);   // sai encolhendo para a ponta
+    this._selBand = sel ? band || (this._vb && [this._pNow || 0, ...this._vb]) : null;   // balão aberto: a faixa da cena fica parada (_resize) e o 2º toque cai no mesmo aparelho
+    if (sel) this._selRender(); else if (band) this._resize(true);   // fechou: a cena volta à faixa de verdade, deslizando
+  }
+  _selRender() {   // também a cada atualização do HA (_renderPanel): só reescreve o que mudou, e o aria-live não repete
+    const s = this._sel; if (!s) return;
+    const it = ITEMS.find((i) => i.key === s.key), st = this._state[s.key], on = !!(st && st.on);
+    const txt = [it.short || it.label, `${s.room} · ${this._stateText(it, st, true)}`, it.kind === 'sensor' ? 'Detalhes' : it.kind === 'light' ? (on ? 'Apagar' : 'Acender') : (on ? 'Desligar' : 'Ligar')];   // "Luz" · "Quarto · acesa", como o bloco do painel
+    if (txt.join('|') === this._selTxt) return;
+    this._selTxt = txt.join('|'); [this._selName.textContent, this._selState.textContent, this._selBtn.textContent] = txt; this._selEl.setAttribute('aria-label', `${txt[0]}, ${s.room}`);
+    this._selBtn.classList.toggle('go', it.kind !== 'sensor' && !on);   // Acender/Ligar: âmbar cheio · Apagar/Desligar/Detalhes: grafite
+    this._selWH = [this._selEl.offsetWidth, this._selEl.offsetHeight]; this._selPlace();   // medida para o _selPlace (só quando o texto muda)
+  }
+  // balão preso ao ponto tocado: acompanha a câmera (_frame); some quando ela gira para longe (ponto atrás dela ou fora da faixa da cena).
+  // Encostado na borda, a ponta continua no ponto; perto do cabeçalho, abre embaixo dele
+  _selPlace() {
+    const s = this._sel || this._selGone; if (!s) return;
+    this._camera.updateMatrixWorld();
+    const v = s.p.clone().project(this._camera), W = this._canvas.clientWidth, H = this._canvas.clientHeight, [bw, bh] = this._selWH || [200, 56], b = this._selEl;
+    const px = (v.x + 1) / 2 * W, py = (1 - v.y) / 2 * H, P = this._pNow || 0, B = this._vb ? this._vb[0] : 0, m = (P + W) / 2, below = py - 14 - bh < (this._hudH || 58);
+    const x = clamp(px, Math.min(P + 8 + bw / 2, m), Math.max(W - 8 - bw / 2, m));   // mais largo que a faixa: centrado nela
+    b.style.translate = `calc(${x.toFixed(1)}px - 50%) calc(${py.toFixed(1)}px ${below ? '+ 14px' : '- 100% - 14px'})`;   // posição em translate: a escala da entrada nasce da ponta (transform-origin)
+    b.style.setProperty('--ax', `${clamp(px - x, 24 - bw / 2, bw / 2 - 24).toFixed(1)}px`); b.classList.toggle('below', below);
+    b.style.visibility = v.z > 1 || px < P || px > W || py < 0 || py > H - B ? 'hidden' : '';   // B: a folha do celular por cima
+  }
+  _selAct() { const k = this._sel && this._sel.key; if (!k) return; this._select(null); this._toggleItem(k); this._flashRow(k); }
+  // alvo do toque: aparelho sob o ponto → o cômodo dele (+ a chave); senão o cômodo sob o ponto. Na Pessoa só aparelho (o piso é destino)
+  _tapRoom(e, hit = this._pickHit(e)) {
+    const o = hit && hit.object, key = o && !o.userData.zone && o.userData.item;
+    if (this._walkOn && !key) return null;
+    const at = this._topRoom(e); if (!key) return at && { r: at };
+    const rs = this._roomsAll().filter((q) => this._roomKeys(q).includes(key));   // "externa" serve à Varanda e ao Jardim: vale o do ponto
+    return { r: rs.includes(at) ? at : rs[0] || at, key };
+  }
+  // Painel contextual (v1.6.1): o painel lateral focado no cômodo r (null = visão geral, com abas e filtros). Abre o painel recolhido —
+  // menos na Pessoa com a coluna por cima da vista (celular): a gaveta cobriria o joystick no meio do passeio; o cômodo fica pronto
+  // e a aba "Painel" da borda passa a mostrar o nome dele.
+  _showRoom(r, key, stay) {   // stay: 1º toque num aparelho — o cômodo entra no painel como está (recolhido, espiada…), sem abrir nem mudar a altura
+    r = r || null; const d = this._dock, ch = r !== this._room;
+    if (!r && this._focused) this._unfocus();
+    if (ch) {
+      this._room = r; d.classList.toggle('room', !!r); this._detail.hidden = true; this._detailKey = null; if (!stay) this._select(null);   // o balão é do cômodo de antes (no stay o _onClick já troca)
+      this._reopen.querySelector('.rl').textContent = r ? r.label : 'Painel';
+      if (r) {
+        this._rTitle.textContent = r.label; this._showTab('ctl'); this._rSw.setAttribute('aria-label', `Tudo em ${r.label}`); this._rSw.classList.add('still'); delete this._rSw.dataset.hold;   // outro cômodo: o interruptor já nasce na posição dele (a posição segurada era do de antes)
+        const autos = this._roomAutos(r), f = this._rFoot; f.replaceChildren();
+        if (autos.length) { const h = document.createElement('div'), al = document.createElement('div'); h.className = 'sect'; h.textContent = 'Automações'; al.className = 'autos'; for (const a of autos) al.appendChild(this._autoRow(a, Date.now())); f.append(h, al); }
+        f.appendChild(this._rEnter);
+      }
+      this._setZone(r ? this._zone : this._onKeys().length ? 'on' : '');   // blocos: só os do cômodo · de volta ao geral: "Ligados" se houver
+    }
+    if (r) { const bl = this._topView && !this._backBtn.hidden ? this._backBtn.getAttribute('aria-label') : 'Todos os cômodos'; this._rBack.setAttribute('aria-label', bl); this._rBack.title = bl; }   // o mesmo voltar do topo (o 2º toque muda ele sem trocar de cômodo)
+    this._roomHl();
+    if (r && !this._panelOpen && !stay && !(this._walkOn && this._sideOverlay)) this._setPanel(true);
+    else { this._renderPanel(); if ((r || ch) && !stay) this._snapTo(r ? 'half' : 'peek'); }   // folha: cômodo na média, geral na espiada
+    if (key) this._flashRow(key);
+    if (this._maq) this._mpSync();
+  }
+  // sem realce azul ao selecionar cômodo/aparelho (pedido do dono); o azul fica só no passar do mouse na planta/área da Vista de cima
+  // Cartão de hover (noite): nome do cômodo + estado (luzes acesas, ar). Só visual; quem chama é o _onHover (pacote Cena).
+  _hoverCardShow(r, x, y) {
+    const hc = this._hcard; if (!hc || !r) return this._hoverCardHide();
+    try {
+      const keys = this._roomKeys(r), its = keys.map((k) => ITEMS.find((i) => i.key === k)).filter(Boolean), st = (k) => this._state[k] || {};
+      const lights = its.filter((i) => i.kind === 'light'), on = lights.filter((i) => st(i.key).on).length;
+      const ac = its.filter((i) => i.kind === 'climate' && st(i.key).on).length;
+      const parts = [];
+      if (lights.length) parts.push(on ? `${on} ${on === 1 ? 'luz acesa' : 'luzes acesas'}` : 'luzes apagadas');
+      if (ac) parts.push('ar ligado');
+      if (!parts.length) parts.push('toque para abrir');
+      const sig = r.label + '|' + parts.join();
+      if (this._hcKey !== sig) { this._hcB.textContent = r.label; this._hcS.replaceChildren(document.createElement('i'), parts.join(' · ')); this._hcKey = sig; }
+      hc.classList.toggle('on', on > 0 || ac > 0);
+      const w = this._wrap.clientWidth || 0, hh = this._wrap.clientHeight || 0, bw = hc.offsetWidth || 160;
+      const px = Math.max(bw / 2 + 8, Math.min(w - bw / 2 - 8, x)), py = Math.max(70, Math.min(hh - 12, y));
+      hc.style.left = px + 'px'; hc.style.top = py + 'px'; hc.hidden = false; hc.classList.add('show');
+    } catch (_) { this._hoverCardHide(); }
+  }
+  _hoverCardHide() { if (this._maq) this._hoverRoomSet(null); const hc = this._hcard; if (!hc || hc.hidden) return; hc.classList.remove('show'); hc.hidden = true; this._hcKey = ''; }
+  // ---------------------------------------------------------------------------
+  // Look 'maquete': painel do cômodo à direita (layout do vídeo), pontinhos nos cômodos, sancas âmbar, luz do hover e API pública
+  // ---------------------------------------------------------------------------
+  // fitas de LED âmbar no alto das paredes internas (acendem com a luz do cômodo)
+  _buildSancas(scene) {
+    const map = { quarto_casal: 'quarto', quarto: 'quarto', sala: 'sala', balcao: 'balcao', banheiro: 'banheiro', dispensa: 'banheiro' }, y = H - 0.16, i = T / 2 + 0.022;
+    for (const [id, key] of Object.entries(map)) {
+      const z = ZONES[id], rt = this._items.get(key); if (!rt) continue;
+      const mat = new THREE.MeshStandardMaterial({ color: 0x4a3d2c, emissive: 0xffa24d, emissiveIntensity: 0, roughness: 0.6 }); (rt.sancas = rt.sancas || []).push(mat);
+      for (const m of [box(z.w - 2 * i, 0.05, 0.03, mat, z.x + z.w / 2, y, z.z + i, { cast: false }), box(z.w - 2 * i, 0.05, 0.03, mat, z.x + z.w / 2, y, z.z + z.d - i, { cast: false }),
+        box(0.03, 0.05, z.d - 2 * i, mat, z.x + i, y, z.z + z.d / 2, { cast: false }), box(0.03, 0.05, z.d - 2 * i, mat, z.x + z.w - i, y, z.z + z.d / 2, { cast: false })]) scene.add(m);
+    }
+  }
+  // textos curtos do painel (o cômodo no layout do vídeo)
+  static get MAQ_TEXT() {
+    return { quarto_casal: 'Suíte ao fundo da casa, com janela para o terreno e porta para a varanda.', quarto: 'Quarto com TV na parede, luz principal e fita de LED em tom quente.',
+      sala: 'Sala integrada à cozinha, com ar-condicionado e porta para a varanda.', balcao: 'Balcão da cozinha, com janela ao fundo e vidro de correr para a varanda.',
+      varanda: 'Varanda coberta, aberta para o deck e a piscina.', piscina: 'Deck de madeira em volta da piscina, com luz subaquática e bomba de filtragem.',
+      jardim: 'Jardim lateral, com arandelas acesas no muro.', quintal: 'Pátio da frente, com portão para a rua.', banheiro: 'Banheiro com box de vidro e luz própria.',
+      dispensa: 'Dispensa ao lado do banheiro.', garagem: 'Garagem com o carro e portão para a rua.' };
+  }
+  _mpDevices(r) { return this._roomKeys(r).map((k) => ITEMS.find((i) => i.key === k)).filter((it) => it && it.kind !== 'sensor'); }
+  _mpBuild(wrap) {
+    const mp = document.createElement('aside'); mp.className = 'mpan'; mp.setAttribute('aria-label', 'Cômodo'); mp.setAttribute('aria-hidden', 'true'); mp.inert = true;
+    mp.innerHTML = '<div class="mp1"><span class="mpe">Cômodo</span><span class="mpill"><i></i><em></em></span></div><h2></h2>'
+      + '<div class="mpn"><div><b class="n1"></b><small>aparelhos</small></div><div><b class="n2"></b><small>ligados</small></div><div><b class="n3"></b><small>temperatura</small></div></div>'
+      + '<div class="mph"></div><p></p><ol></ol><div class="mpb"><button type="button" class="b1"></button><button type="button" class="b2">Voltar à casa</button></div>';
+    const q = (s) => mp.querySelector(s);
+    this._mp = mp; this._mpQ = { eye: q('.mpe'), pill: q('.mpill'), pt: q('.mpill em'), h: q('h2'), n1: q('.n1'), n2: q('.n2'), n3: q('.n3'), hl: q('.mph'), p: q('p'), ol: q('ol'), all: q('.b1') };
+    this._mpQ.all.addEventListener('click', () => { const r = this._room; if (!r) return; const ds = this._mpDevices(r), allOn = ds.length && ds.every((d) => this._state[d.key] && this._state[d.key].on); for (const d of ds) this._setItem(d.key, !allOn); this._maqEmit(); });
+    q('.b2').addEventListener('click', () => this._showRoom(null));
+    wrap.appendChild(mp);
+    // pontinhos brancos nos cômodos (abrem o cômodo; o hover mostra o cartão e acende a luz)
+    const hs = document.createElement('div'); hs.className = 'hots'; wrap.appendChild(hs); this._hots = hs; this._hotList = [];
+  }
+  _hotBuild() {
+    if (this._hotList.length || !this._places) return;
+    const at = { piscina: [(POOL.x0 + POOL.x1) / 2, POOL.zc], quintal: [8.0, 14.6] };
+    for (const r of this._roomsAll()) {
+      const z = ZONES[r.id], b = this._roomBox(r), p = at[r.id] || (z && z.lp) || [(b[0] + b[2]) / 2, (b[1] + b[3]) / 2];
+      const btn = document.createElement('button'); btn.type = 'button'; btn.className = 'hot'; btn.setAttribute('aria-label', r.label);
+      btn.addEventListener('click', (e) => { e.stopPropagation(); this._hoverCardHide(); this._maqOpenRoom(r); });
+      btn.addEventListener('pointerenter', () => { this._hoverRoomSet(r); const hb = btn.getBoundingClientRect(), wb = this._wrap.getBoundingClientRect(); this._hoverCardShow(r, hb.left - wb.left + hb.width / 2, hb.top - wb.top + 4); });
+      btn.addEventListener('pointerleave', () => { this._hoverCardHide(); this._hoverRoomSet(null); });
+      this._hots.appendChild(btn); this._hotList.push({ r, btn, v: new THREE.Vector3(p[0], 1.1, p[1]) });
+    }
+    this._hotPlace();
+  }
+  _hotPlace() {
+    if (!this._hotList || !this._hotList.length) return;
+    const w = this.clientWidth, h = this.clientHeight, hide = this._walkOn || this._topView; this._hots.hidden = !!hide; if (hide) return;
+    this._camera.updateMatrixWorld(); const v = this._hv || (this._hv = new THREE.Vector3());
+    for (const o of this._hotList) {
+      v.copy(o.v).project(this._camera);
+      const sx = (v.x * 0.5 + 0.5) * w, sy = (-v.y * 0.5 + 0.5) * h, ok = v.z < 1 && sx > 4 && sx < w - 4 && sy > 4 && sy < h - 4;
+      o.btn.style.transform = `translate(${sx.toFixed(1)}px, ${sy.toFixed(1)}px)`; o.btn.style.visibility = ok ? '' : 'hidden';
+      o.btn.classList.toggle('sel', this._room === o.r);
+    }
+  }
+  // 1 toque (ou pontinho): aproxima a câmera no cômodo e abre o painel dele
+  _maqOpenRoom(r) { if (!r) return; this._focused = null; this._focusRoom(r); this._showRoom(r); }
+  // painel aberto/fechado conforme o cômodo atual (chamado no fim do _showRoom)
+  _mpSync() {
+    const mp = this._mp; if (!mp) return;
+    const r = this._room, open = !!r; this._mpOpen = open;
+    mp.classList.toggle('open', open); mp.setAttribute('aria-hidden', open ? 'false' : 'true'); mp.inert = !open;
+    if (open) this._mpRender();
+    this._wrap.classList.toggle('mpo', open);
+    requestAnimationFrame(() => { this._mpMeasure(); this._resize(true); });
+    this._maqEmit();
+  }
+  _mpMeasure() { const mp = this._mp; if (!mp) return; this._mpBottom = this._wrap.clientWidth < 700; this._mpW = mp.offsetWidth || 316; this._mpH = Math.min(mp.offsetHeight || 0, this._wrap.clientHeight * 0.55) + 14; }
+  _mpRender() {
+    const r = this._room, Q = this._mpQ; if (!r || !Q) return;
+    const ds = this._mpDevices(r), st = (k) => this._state[k] || {}, on = ds.filter((d) => st(d.key).on), allOn = ds.length > 0 && on.length === ds.length;
+    Q.h.textContent = r.label; Q.n1.textContent = ds.length; Q.n2.textContent = on.length;
+    const ac = ds.find((d) => d.kind === 'climate'), a = ac && st(ac.key).attrs, tmp = a ? (a.current_temperature != null ? a.current_temperature : a.temperature) : null;
+    Q.n3.textContent = tmp != null ? `${Math.round(tmp)}°` : '—';
+    Q.pill.classList.toggle('on', on.length > 0); Q.pt.textContent = !ds.length ? 'sem aparelhos' : on.length ? `${on.length} ${on.length === 1 ? 'ligado' : 'ligados'}` : 'tudo desligado';
+    const has = (k) => ds.some((d) => d.key === k && st(k).on), lights = on.filter((d) => d.kind === 'light').length;
+    Q.hl.textContent = !ds.length ? 'Sem aparelhos' : has('tv') ? 'Noite de cinema' : ac && st(ac.key).on && lights ? 'Ambiente climatizado' : lights > 1 ? 'Luz aconchegante' : lights ? 'Luz acesa' : on.length ? 'Em uso' : 'Em repouso';
+    Q.p.textContent = Casa3DCard.MAQ_TEXT[r.id] || '';
+    const sig = r.id + '|' + ds.map((d) => d.key).join();
+    if (this._mpSig !== sig) {
+      this._mpSig = sig; Q.ol.replaceChildren(); this._mpLis = {};
+      ds.forEach((d, i) => {
+        const li = document.createElement('li'), b = document.createElement('button'); b.type = 'button'; b.setAttribute('role', 'switch');
+        b.innerHTML = '<span class="n">' + String(i + 1).padStart(2, '0') + '</span><span class="t"></span><span class="st"><em></em><span class="sw"></span></span>';
+        b.querySelector('.t').textContent = d.kind === 'light' && d.short === 'Luz' ? (d.label === r.label ? 'Luz principal' : 'Luz ' + d.label) : d.label; b.addEventListener('click', () => { this._toggleItem(d.key); this._maqEmit(); });
+        li.appendChild(b); Q.ol.appendChild(li); this._mpLis[d.key] = li;
+      });
+    }
+    for (const d of ds) {
+      const li = this._mpLis[d.key]; if (!li) continue; const s = st(d.key), isOn = !!s.on;
+      li.classList.toggle('on', isOn); li.firstChild.setAttribute('aria-checked', isOn ? 'true' : 'false');
+      li.querySelector('em').textContent = d.kind === 'light' || d.kind === 'switch' ? (s.unavailable ? 'indisponível' : isOn ? 'ligado' : 'desligado') : (s.text || '').split(' · ').slice(0, 2).join(' · ');
+    }
+    Q.all.textContent = allOn ? 'Desligar tudo' : 'Ligar tudo'; Q.all.disabled = !ds.length;
+  }
+  _setItem(key, want) { const s = this._state[key]; if (!!(s && s.on) !== !!want) this._toggleItem(key); }
+  // luz de hover: acende o cômodo sob o mouse (ponto âmbar suave que sobe e desce)
+  _hoverRoomSet(r) {
+    if (!this._hvLight) return;
+    if (!r) { this._hvGoal = 0; if (this._orbit) this._orbit.dirty = true; return; }
+    if (this._hvRoom !== r) { const b = this._roomBox(r), area = (b[2] - b[0]) * (b[3] - b[1]); this._hvRoom = r; this._hvLight.position.set((b[0] + b[2]) / 2, 2.3, (b[1] + b[3]) / 2); this._hvLight.distance = Math.max(7, Math.sqrt(area) * 1.5); this._hvI = Math.min(34, 8 + area * 1.2); }
+    this._hvGoal = this._hvI; if (this._orbit) this._orbit.dirty = true;
+  }
+  // API pública mínima: el.casa3d
+  _maqApi() {
+    const self = this, cbs = new Set();
+    this._maqCbs = cbs;
+    const find = (id) => self._roomsAll().find((r) => r.id === id || r.label === id) || null;
+    const dev = (it) => { const s = self._state[it.key] || {}; return { key: it.key, label: it.label, kind: it.kind, on: !!s.on, text: s.text || '' }; };
+    return {
+      rooms() { return self._roomsAll().map((r) => ({ id: r.id, label: r.label, block: r.block.id, devices: self._mpDevices(r).map(dev) })); },
+      toggle(room, device) {
+        const r = typeof room === 'string' ? find(room) : room, k = device && device.key || device;
+        if (!r || !self._mpDevices(r).some((d) => d.key === k)) return false;
+        self._toggleItem(k); return true;
+      },
+      state() {
+        const devices = {}; for (const it of ITEMS) if (it.kind !== 'sensor') devices[it.key] = !!(self._state[it.key] && self._state[it.key].on);
+        const rooms = {}; for (const r of self._roomsAll()) { const ds = self._mpDevices(r); rooms[r.id] = { total: ds.length, on: ds.filter((d) => devices[d.key]).length }; }
+        return { devices, rooms, selected: self._room ? self._room.id : null, on: Object.keys(devices).filter((k) => devices[k]) };
+      },
+      onChange(cb) { if (typeof cb !== 'function') return () => {}; cbs.add(cb); return () => cbs.delete(cb); },
+      camera() {
+        const c = self._camera, t = self._orbit && self._orbit.target;
+        return { position: c ? { x: c.position.x, y: c.position.y, z: c.position.z } : null, target: t ? { x: t.x, y: t.y, z: t.z } : null, fov: c ? c.fov : null, room: self._room ? self._room.id : null };
+      },
+    };
+  }
+  _maqEmit() {
+    if (!this._maqCbs || !this._maqCbs.size || this._emitQ) return;
+    this._emitQ = true; Promise.resolve().then(() => { this._emitQ = false; const s = this.casa3d.state(); for (const cb of [...this._maqCbs]) { try { cb(s); } catch (_) {} } });
+  }
+  _roomHl() { this._hlShow(null); this._orbit.dirty = true; }
+  // cartão de hover sob o mouse (leve: no máximo ~25x por segundo); room já resolvido ou null
+  _hoverCardAt(e, r) {
+    if (!r) return this._hoverCardHide();
+    if (this._maq) this._hoverRoomSet(r);
+    const b = this._wrap && this._wrap.getBoundingClientRect(); if (!b) return;
+    this._hoverCardShow(r, e.clientX - b.left, e.clientY - b.top);
+  }
+  _onHover(e) {
+    if (e.pointerType && e.pointerType !== 'mouse') return;
+    if (this._orbit) this._orbit.userAt = performance.now();   // mouse sobre a cena: a auto-rotação espera (o cômodo não foge do cartão)
+    if (this._topView && this._nav.level < 2) {   // planta: realça a área · área: o cômodo sob o mouse
+      const r = this._topRoom(e), b = r && (this._nav.level === 0 || r.block !== this._nav.block) ? r.block : null;
+      this._hoverCardAt(e, r);
+      const key = r ? (b ? 'b:' + b.id : 'r:' + r.id) : '';
+      this._canvas.classList.toggle('pick', !!r);
+      if (key !== this._hoverKey) {
+        this._hoverKey = key; if (r) this._hlShow((b ? b.rooms : [r]).flatMap((q) => q.rects).map(([x, z, w, d]) => [x, z, x + w, z + d])); else this._roomHl();   // saiu: sem realce
+        this._orbit.dirty = true;
+      }
+      return;
+    }
+    if (this._hoverKey) { this._hoverKey = ''; this._roomHl(); }
+    if (this._walkOn) this._hoverCardHide(); else { const tn = performance.now(); if (tn - (this._hvT || 0) > 40) { this._hvT = tn; this._hoverCardAt(e, this._topRoom(e)); } }
+    const o = this._pick(e);
+    if (this._walkOn) this._walkHover(e);
+    // no modo Pessoa o piso vira destino (anel âmbar) e a folha da porta também é clicável
+    this._canvas.classList.toggle('pick', (!!o && !(this._walkOn && o.userData.zone)) || (this._walkOn && (!!this._doorHit() || !!this._hoverDest)));
+    const tint = this._walkOn ? null : o;
+    if (tint !== this._hoverObj) {
+      if (this._hoverObj && this._hoverObj.userData.zone) this._hoverObj.material.emissive.setHex(0x000000);
+      if (tint && tint.userData.zone) tint.material.emissive.setHex(0x1a1a1a);
+      this._hoverObj = tint; this._orbit.dirty = true;
+    }
+  }
+
+  // ---- Painel lateral: cômodos (blocos), rotinas, atividade ----
+  _svc(domain, service, entity, data) {
+    const payload = Object.assign({ entity_id: entity }, data || {});
+    if (this._hass && this._hass.callService) this._hass.callService(domain, service, payload);
+    this._lastSig = '';
+  }
+  _sceneCtx() {
+    return { e: (k) => this.entity(k), on: (k) => this._svc('homeassistant', 'turn_on', this.entity(k)), off: (k) => this._svc('homeassistant', 'turn_off', this.entity(k)), call: (d, sv, e, data) => this._svc(d, sv, e, data) };
+  }
+  // Temporizador local: desliga a entidade depois de N minutos (enquanto o cartão estiver aberto)
+  _setTimer(key, minutes) {
+    const cur = this._timers[key]; if (cur) { clearTimeout(cur.handle); delete this._timers[key]; }
+    if (minutes > 0) {
+      const at = Date.now() + minutes * 60000;
+      const handle = setTimeout(() => { delete this._timers[key]; this._svc('homeassistant', 'turn_off', this.entity(key)); this._pushActivity(key, 'off', Date.now()); this._renderPanel(); }, minutes * 60000);
+      this._timers[key] = { at, handle, min: minutes };
+    }
+    this._renderPanel();
+  }
+  _timerText(key, now = Date.now()) {
+    const t = this._timers[key]; if (!t) return '';
+    const m = Math.max(1, Math.round((t.at - now) / 60000)); return ` · desliga em ${m} min`;
+  }
+  _setPanel(open, snap = 'half') {
+    if (this._maq) { this._panelOpen = false; if (this._dock) this._dock.hidden = true; if (this._reopen) this._reopen.hidden = true; if (open && this._room) this._mpSync(); return; }   // maquete: o painel é o da direita (_mpSync)
+    this._panelOpen = !!open; this._selBand = null;   // abrir/recolher reenquadra a cena mesmo com o balão aberto
+    const d = this._dock, a = this.shadowRoot.activeElement;
+    cancelAnimationFrame(this._sprRaf); this._sprRaf = 0; this._sprX = 0;
+    clearTimeout(this._dockT); d.classList.remove('closing');
+    if (!open && !d.hidden && !this._reduced && this._wrap && this._wrap.isConnected) {   // recolhe deslizando para a esquerda (~0,2 s); o estado já vale na hora
+      d.classList.add('closing');
+      this._dockT = setTimeout(() => { d.classList.remove('closing'); d.hidden = !this._panelOpen; d.style.transform = ''; }, 200);
+    } else { d.hidden = !open; d.style.transform = ''; }
+    if (open && this._sideOverlay) this._closeGoto();   // painel do celular por cima: a lista "Ir para…" sai
+    this._reopen.hidden = !!open;
+    if (!open && d.contains(a)) this._reopen.focus({ preventScroll: true });   // teclado: recolheu com o foco dentro → a pílula; reabriu por ela → o resumo (no cômodo, o ‹)
+    else if (open && a === this._reopen) (this._room ? this._rBack : this._countEl).focus({ preventScroll: true });
+    if (this._wrap) this._wrap.classList.toggle('side', !!open);   // .goto fica à direita da coluna, sem cruzá-la
+    this._panelBtn.setAttribute('aria-pressed', open ? 'true' : 'false');
+    if (open) { this._setZone(this._onKeys().length ? 'on' : ''); this._renderPanel(); }   // abre em "Ligados" se houver algo ligado
+    if (open && this._sheet) { d.dataset.snap = snap; this._grab.setAttribute('aria-expanded', snap !== 'peek' ? 'true' : 'false'); this._sideX(this._snaps()[snap]); }   // a folha entra já na altura dela
+    requestAnimationFrame(() => this._resize());
+  }
+  // Gaveta (v1.5): no toque, arrastar a coluna para a esquerda acompanha o dedo 1:1 (limiar de 10 px antes de assumir o gesto);
+  // ao soltar, abre ou fecha pela posição projetada com a velocidade do dedo e assenta numa mola que herda essa velocidade.
+  // Agarrar no meio da mola interrompe e segue daqui; puxar além do aberto (para a direita) tem resistência progressiva.
+  // Folha de baixo: o mesmo gesto no eixo Y, com três alturas (espiada, média, cheia) em vez de aberta/fechada (ver _snaps)
+  _swipeBind(dock) {
+    let g = null;
+    const W = () => (this._sheet ? this._snaps().shut : dock.offsetWidth + 16);   // deslocamento de "fechado" (sai inteira por onde entrou: esquerda, ou baixo na folha)
+    const P = (e) => (this._sheet ? [e.clientY, e.clientX] : [-e.clientX, e.clientY]);   // [eixo do gesto, transversal]; coluna: + = para a esquerda
+    const rubber = (x, dim) => x * dim * 0.55 / (dim + 0.55 * Math.abs(x));
+    dock.addEventListener('pointerdown', (e) => {
+      if (e.pointerType !== 'touch' || g || e.target.closest('input[type="range"]')) return;   // o brilho (range) arrasta de lado
+      const pane = this._sheet && e.target.closest('.pane');   // folha: fora da cheia o dedo em qualquer ponto move a folha; na cheia a lista rola
+      const moving = !!this._sprRaf; cancelAnimationFrame(this._sprRaf); this._sprRaf = 0;
+      const [sx, sy] = P(e); g = { id: e.pointerId, sx, sy, x0: this._sprX || 0, live: moving, hist: [], snap: dock.dataset.snap, pane: dock.dataset.snap === 'full' && pane };
+      if (moving) try { dock.setPointerCapture(e.pointerId); } catch (_) {}
+    });
+    dock.addEventListener('pointermove', (e) => {
+      if (!g || e.pointerId !== g.id) return;
+      const [px, py] = P(e), dx = px - g.sx, dy = py - g.sy;
+      if (!g.live) {
+        if (Math.abs(dy) > 10 && Math.abs(dy) > Math.abs(dx)) { g = null; return; }   // gesto transversal: é rolagem da lista
+        if (g.pane && !(g.pane.scrollTop <= 0 && dx > 0)) { if (Math.abs(dx) > 10) g = null; return; }   // na cheia só puxar para baixo com a lista no topo desce a folha
+        if (Math.abs(dx) < 10) return;
+        g.live = true; g.sx += Math.sign(dx) * 10; try { dock.setPointerCapture(e.pointerId); } catch (_) {}   // assume o gesto: segue o dedo descontando os 10 px do limiar (sem pulo)
+      }
+      this._dragging = true;
+      const x = g.x0 + px - g.sx;
+      this._sideX(x < 0 ? -rubber(-x, W()) : x);
+      g.hist.push([e.timeStamp, this._sprX]); if (g.hist.length > 6) g.hist.shift();
+    });
+    const end = (e) => {
+      if (!g || e.pointerId !== g.id) return;
+      const s = g; g = null; this._dragging = false; try { dock.releasePointerCapture(e.pointerId); } catch (_) {}
+      if (!s.live) return;
+      this._swiped = performance.now();   // o "click" que o navegador ainda manda ao soltar não liga o bloco
+      const h = s.hist, a = h[0], b = h[h.length - 1];
+      const v = e.type === 'pointerup' && a && b[0] - a[0] > 0 ? (b[1] - a[1]) / (b[0] - a[0]) * 1000 : 0;   // px/s
+      const proj = this._sprX + (v / 1000) * 0.998 / (1 - 0.998);   // projeção do momento (desaceleração 0,998)
+      if (this._sheet) {   // detente mais perto da projeção; fechar só a partir da espiada (senão para nela, com o cômodo e o realce)
+        const S = this._snaps(); let to = Object.keys(S).reduce((a, k) => (Math.abs(S[k] - proj) < Math.abs(S[a] - proj) ? k : a), 'full');
+        if (to === 'shut' && s.snap !== 'peek') to = 'peek';
+        if (to !== 'shut') { this._snapTo(to, v); return; }
+      }
+      const close = proj > W() / 2;
+      if (this._reduced) { if (close) this._setPanel(false); else this._sideX(0); return; }
+      this._sideSpring(close ? W() : 0, v, () => { if (close) this._setPanel(false); });
+    };
+    dock.addEventListener('pointerup', end); dock.addEventListener('pointercancel', end);
+    dock.addEventListener('click', (e) => { if (performance.now() - (this._swiped || 0) < 350) { e.stopPropagation(); e.preventDefault(); } }, true);
+  }
+  // posição da coluna (0 = aberta, + = para a esquerda; na folha, para baixo)
+  _sideX(x) {
+    this._sprX = x; const s = this._dock.style; s.transform = x ? (this._sheet ? `translateY(${x}px)` : `translateX(${-x}px)`) : '';   // coluna: + = para a esquerda (fora)
+    s.clipPath = this._sheet && !this._narrow && x > 0 ? `inset(0 0 ${x}px round 22px)` : '';   // folha flutuante (tablet): o que desce some no vão de 12 px, com os cantos de baixo; assentada no alto, a sombra volta
+    s.willChange = this._sprRaf || this._dragging ? 'transform' : '';   // camada própria só enquanto a mola ou o dedo mexem
+    if (this._sheet && !this._narrow) { const h = this._dShadow.style; h.height = `${Math.max(0, this._dock.offsetHeight - Math.max(0, x))}px`; h.transform = x < 0 ? s.transform : ''; }   // tablet: a sombra veste só o pedaço à vista (puxada acima da cheia, sobe junto)
+  }
+  // alturas da folha como deslocamento para baixo: cheia (tudo), média (até metade do cartão), espiada (só a 1ª linha), fechada
+  _snaps() {
+    const d = this._dock, H = d.offsetHeight, el = this._room ? this._rTitle.parentNode.parentNode : this._phead;   // 1ª linha: a do cômodo ou o resumo
+    const pk = el.getBoundingClientRect().bottom - d.getBoundingClientRect().top + (parseFloat(window.getComputedStyle(d).getPropertyValue('--sab')) || 0) + (this._room ? 8 : 0);   // cômodo: 8 px de respiro embaixo, como o do resumo
+    return { full: 0, half: Math.max(0, H - Math.round(this.clientHeight * 0.5)), peek: Math.max(0, H - pk), shut: H + 16 };
+  }
+  // leva a folha a uma altura com a mola (ou direto, sem animação); a câmera reenquadra quando ela assenta
+  _snapTo(n, v = 0, now = this._reduced) {   // now: sem mola (menos movimento, Tab)
+    const d = this._dock; if (!this._sheet || !this._panelOpen || d.hidden) return;
+    this._selBand = null;   // mudar a altura reenquadra a cena mesmo com o balão aberto
+    if (n !== 'full') for (const t of Object.values(this._panes)) t.pane.scrollTop = 0;   // fora da cheia a lista volta ao topo (o clip guardaria o deslocamento e ele voltaria num salto)
+    d.dataset.snap = n; this._grab.setAttribute('aria-expanded', n !== 'peek' ? 'true' : 'false');
+    if (now) { cancelAnimationFrame(this._sprRaf); this._sprRaf = 0; this._sideX(this._snaps()[n]); this._resize(); return; }
+    this._sideSpring(() => this._snaps()[n], v, () => this._resize(true));   // alvo medido a cada quadro: o conteúdo pode mudar de altura no caminho
+  }
+  // mola feita à mão (amortecimento 0,8, resposta 0,3 s), partindo da posição e da velocidade atuais
+  _sideSpring(goal, v, done, x = this._sprX || 0, set = (p) => this._sideX(p), id = '_sprRaf') {   // x/set/id: a borda do painel usa a mesma mola
+    const w = 2 * Math.PI / 0.3, k = w * w, c = 2 * 0.8 * w;
+    const G = typeof goal === 'function' ? goal : () => goal; if (id === '_sprRaf') this._sprGoal = G;   // alvo (o _resize enquadra a câmera já nele)
+    let last = 0, to;
+    const tick = (t) => {
+      const dt = last ? Math.min((t - last) / 1000, 0.1) : 1 / 60; last = t; to = G();
+      for (let i = 0, n = Math.ceil(dt * 240); i < n; i++) { v += (-k * (x - to) - c * v) * (dt / n); x += v * (dt / n); }   // Euler semi-implícito
+      if (Math.abs(x - to) < 0.5 && Math.abs(v) < 8) { this[id] = 0; set(to); if (done) done(); return; }
+      set(x); this[id] = requestAnimationFrame(tick);
+    };
+    cancelAnimationFrame(this[id]); this[id] = requestAnimationFrame(tick);
+  }
+  // Borda direita da coluna (desktop/tablet deitado): arrasto 1:1 com elástico nos limites; ao soltar, mola até o encaixe mais perto da
+  // projeção — compacta (1 coluna) · padrão · larga (3 colunas do mesmo tamanho). Teclado ←/→ troca de encaixe, Home/End vão às pontas,
+  // duplo clique volta ao padrão. Enquanto mexe só o --side-w muda (a cena espera: _sizing); a câmera reenquadra uma vez, ao assentar.
+  _sizerBind(dock) {
+    const sz = document.createElement('div'); sz.className = 'sizer'; sz.tabIndex = 0; this._sizer = sz;
+    for (const [a, v] of [['role', 'separator'], ['aria-orientation', 'vertical'], ['aria-label', 'Largura do painel'], ['title', 'Arraste para ajustar a largura · duplo clique: padrão']]) sz.setAttribute(a, v);
+    dock.appendChild(sz);
+    const setW = (x) => { this._sideW = x = Math.round(x); this._wrap.style.setProperty('--side-w', `${x}px`); };
+    const snaps = () => [this._sideMin, this._sideAuto, Math.min(470, this._sideMax)];
+    const begin = () => { cancelAnimationFrame(this._szRaf); this._szRaf = 0; this._sizing = true; this._wrap.classList.add('sizing'); };
+    const finish = () => { this._szRaf = requestAnimationFrame(() => { this._szRaf = 0; this._sizing = false; this._wrap.classList.remove('sizing'); this._resize(true); }); };   // um quadro depois (o ResizeObserver do último passo ainda espera): um reenquadramento só, deslizando
+    let goal = 0;   // encaixe para onde a mola está indo (teclas seguidas andam a partir dele)
+    const settle = (i, v = 0) => {   // i: encaixe (0 compacta · 1 padrão · 2 larga)
+      const to = snaps()[i]; goal = to; this._sideUser = [this._sideMin, 0, 470][i];   // lembra o encaixe, não os px deste cartão (a larga volta a 470 num maior); o padrão acompanha o cartão
+      try { const ls = window.localStorage; if (this._sideUser) ls.setItem('casa3d.painel_w', String(this._sideUser)); else ls.removeItem('casa3d.painel_w'); } catch (_) {}
+      if (this._reduced) { setW(to); finish(); } else this._sideSpring(to, v, finish, this._sideW, setW, '_szRaf');
+    };
+    const rub = (x) => x * 120 * 0.55 / (120 + 0.55 * Math.abs(x));   // além do limite: resistência progressiva
+    let g = null;
+    this._szStop = () => { g = null; cancelAnimationFrame(this._szRaf); this._szRaf = 0; this._sizing = false; this._wrap.classList.remove('sizing'); };   // cartão saiu da página no meio do ajuste: a captura some sem lostpointercapture na alça
+    sz.addEventListener('pointerdown', (e) => {
+      if (this._sheet || e.button) return;
+      e.preventDefault(); e.stopPropagation();   // sem seleção de texto e sem o arrasto de fechar da coluna (_swipeBind)
+      begin(); try { sz.setPointerCapture(e.pointerId); } catch (_) {}
+      g = { id: e.pointerId, x: e.clientX, w: this._sideW, h: [] };   // agarrou no meio da mola: segue do valor na tela
+    });
+    sz.addEventListener('pointermove', (e) => {
+      if (!g || e.pointerId !== g.id) return;
+      const x = g.w + e.clientX - g.x, lo = this._sideMin, hi = this._sideMax;
+      setW(x < lo ? lo - rub(lo - x) : x > hi ? hi + rub(x - hi) : x);   // 1:1 com o ponto agarrado
+      g.h.push([e.timeStamp, this._sideW]); if (g.h.length > 6) g.h.shift();
+    });
+    const end = (e) => {
+      if (!g || e.pointerId !== g.id) return;
+      const s = g; g = null; try { sz.releasePointerCapture(e.pointerId); } catch (_) {}
+      const S = snaps(); if (this._sideW === s.w && S.includes(s.w)) { finish(); return; }   // clique sem arrastar, parado num encaixe: não mexe na preferência
+      const a = s.h[0], b = s.h[s.h.length - 1], v = e.type === 'pointerup' && a && b[0] > a[0] ? (b[1] - a[1]) / (b[0] - a[0]) * 1000 : 0;
+      const p = this._sideW + v * 0.099;   // projeção curta (desaceleração 0,99): um peteleco não pula o encaixe vizinho
+      settle(S.reduce((q, n, j) => (Math.abs(n - p) < Math.abs(S[q] - p) ? j : q), 0), v);
+    };
+    for (const t of ['pointerup', 'pointercancel', 'lostpointercapture']) sz.addEventListener(t, end);   // perdeu a captura (girou, escondeu): termina igual
+    sz.addEventListener('dblclick', () => { begin(); settle(1); });
+    sz.addEventListener('keydown', (e) => {
+      const S = snaps(), w = this._szRaf ? goal : this._sideW, k = e.key;
+      if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(k)) return;
+      e.preventDefault();
+      const i = k === 'Home' ? 0 : k === 'End' ? 2 : k === 'ArrowLeft' ? [2, 1, 0].find((j) => S[j] < w - 1) : [0, 1, 2].find((j) => S[j] > w + 1);
+      if (i != null) { begin(); settle(i); }
+    });
+  }
+  _buildPanel(wrap) {
+    this._wrap = wrap;
+    const dock = document.createElement('div'); dock.className = 'panel dock'; dock.hidden = true; dock.setAttribute('role', 'region'); dock.setAttribute('aria-label', 'Painel da casa');
+    wrap.appendChild(dock); this._dock = dock;
+    this._dShadow = wrap.appendChild(document.createElement('div')); this._dShadow.className = 'dshadow';   // sombra da folha flutuante (tablet): irmã do .dock, fora do clip-path dele
+    // folha de baixo: alça (toque alterna espiada ↔ média)
+    this._grab = document.createElement('button'); this._grab.className = 'grab'; this._grab.setAttribute('aria-label', 'Expandir painel'); this._grab.setAttribute('aria-expanded', 'false'); dock.appendChild(this._grab);
+    const flip = () => this._snapTo(this._dock.dataset.snap === 'peek' ? 'half' : 'peek');
+    this._grab.addEventListener('click', flip);
+    // cabeçalho: resumo do que está ligado (toque → "Ligados") + recolher (←)
+    const head = document.createElement('div'); head.className = 'phead'; dock.appendChild(head); this._phead = head;
+    head.addEventListener('click', (e) => { if (this._sheet && !e.target.closest('button')) flip(); });
+    this._countEl = document.createElement('button'); this._countEl.className = 'count'; head.appendChild(this._countEl);
+    this._countSr = document.createElement('span'); this._countSr.className = 'sr'; this._countSr.setAttribute('role', 'status'); head.appendChild(this._countSr);   // leitor de tela: anuncia o que ligou/desligou
+    this._countEl.addEventListener('click', () => {
+      if (this._topView && this._nav.level) this._navTo(0); else this._showRoom(null);
+      this._showTab('ctl'); this._setZone('on'); this._snapTo('half');
+    });
+    const spacer = document.createElement('div'); spacer.className = 'spacer'; head.appendChild(spacer);
+    const col = document.createElement('button'); col.className = 'collapse'; col.title = 'Recolher painel'; col.setAttribute('aria-label', 'Recolher painel');
+    col.innerHTML = iconSvg('chevr');
+    col.addEventListener('click', () => { if (this._sheet && this._dock.dataset.snap !== 'peek') this._snapTo('peek'); else this._setPanel(false); }); head.appendChild(col);   // folha: desce até a espiada; dela, fecha
+    // cômodo tocado (ver _showRoom), numa linha: [‹ o mesmo voltar do topo] [nome + "N de M ligados"] [interruptor: tudo do cômodo]
+    const rh = document.createElement('div'); rh.className = 'rhead'; dock.appendChild(rh);
+    rh.innerHTML = `<button class="rback" aria-label="Todos os cômodos">${iconSvg('chevl')}</button><div class="rtitle" role="status"><b></b><small></small></div><span class="swl" aria-hidden="true">Tudo</span><button class="sw still" role="switch"></button>`;
+    this._rBack = rh.firstChild; this._rBack.addEventListener('click', () => {
+      const f = this.shadowRoot.activeElement === this._rBack; if (this._topView) this._navBack(); else this._showRoom(null);
+      if (f) this._countEl.focus({ preventScroll: true });   // o ‹ some com o cômodo: o foco vai ao resumo (como ao reabrir), não ao body
+    });
+    this._rTitle = rh.querySelector('b'); this._rCount = rh.querySelector('small'); this._rSw = rh.lastChild;
+    this._rSw.addEventListener('click', () => this._swFlip(this._rSw, this._roomKeys(this._room)));
+    const tabs = document.createElement('div'); tabs.className = 'tabs'; tabs.setAttribute('role', 'tablist'); tabs.setAttribute('aria-label', 'Seções do painel'); dock.appendChild(tabs);
+    this._panes = {};
+    const panes = [];
+    const TABS = [['ctl', 'Cômodos', 'home'], ['scn', 'Automações', 'auto'], ['act', 'Atividade', 'timer']];
+    for (const [id, label, ic] of TABS) {
+      const b = document.createElement('button'); b.innerHTML = `${iconSvg(ic)}<span>${label}</span>`; b.setAttribute('role', 'tab'); b.dataset.tab = id;
+      b.addEventListener('click', () => this._showTab(id));
+      b.addEventListener('keydown', (e) => {   // setas ← → trocam de aba (padrão WAI-ARIA)
+        const i = TABS.findIndex((x) => x[0] === id), d = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0; if (!d) return;
+        e.preventDefault(); const nx = TABS[(i + d + TABS.length) % TABS.length][0]; this._showTab(nx); this._panes[nx].btn.focus();
+      });
+      tabs.appendChild(b);
+      const pane = document.createElement('div'); pane.className = 'pane top'; pane.dataset.pane = id; pane.setAttribute('role', 'tabpanel'); pane.setAttribute('aria-label', label); panes.push(pane);
+      pane.addEventListener('scroll', () => pane.classList.toggle('top', pane.scrollTop <= 0), { passive: true });   // folha cheia: no topo, puxar desce a folha
+      this._panes[id] = { btn: b, pane };
+    }
+    for (const pane of panes) dock.appendChild(pane);
+    this._swipeBind(dock);
+    this._sizerBind(dock);
+    dock.addEventListener('keydown', (e) => { if (e.key === 'Tab' && !e.shiftKey && this._sheet && dock.dataset.snap !== 'full') this._snapTo('full', 0, true); });   // Tab: a folha abre já, antes de o foco andar (o navegador rola a lista, não a página do HA); Shift+Tab sobe, e o de cima está à vista
+    for (const t of ['pointerdown', 'pointerup']) dock.addEventListener(t, () => { this._tapT = performance.now(); });   // o foco que um toque/clique traz (o Android foca o botão ao soltar) não é o do teclado
+    dock.addEventListener('focusin', (e) => {   // teclado ou leitor de tela abaixo da dobra (Shift+Tab de fora): a folha sobe até a cheia, como no iOS; toque, clique e alvo à vista (foco devolvido) não mexem nela
+      if (!this._sheet || dock.dataset.snap === 'full' || performance.now() - (this._tapT || 0) < 400 || e.target.getBoundingClientRect().bottom <= dock.getBoundingClientRect().bottom - (this._sprX || 0) + 1) return;
+      this._snapTo('full'); this.scrollIntoView({ block: 'nearest' });   // o navegador já rolou a página até o alvo escondido: o cartão volta
+      const t = e.target, p = t.closest('.pane');
+      if (p) requestAnimationFrame(() => { const r = t.getBoundingClientRect(), q = p.getBoundingClientRect(); if (r.bottom > q.bottom) p.scrollTop += r.bottom - q.bottom + 12; });   // o navegador rola antes do focusin, com a lista ainda presa: rola agora
+    });
+    let acc = 0, last = 0, ate = false;   // roda: soma do gesto, hora do último evento, gesto já usado
+    this._wheel = (e) => {   // mouse/trackpad na folha (o _layoutHud só a liga nela): ~32 px abrem a cheia (aí a lista rola) ou descem à espiada; dela para cima, rola a página
+      const gap = e.timeStamp - last; last = e.timeStamp; if (gap > 600) ate = false; if (gap > 1500) acc = 0;   // pausa de 0,6 s: gesto novo; de 1,5 s: o tremor somado some (máquina lenta: um evento por quadro)
+      const to = e.deltaY > 0 ? 'full' : 'peek', s = dock.dataset.snap;
+      if (e.ctrlKey || !e.deltaY || (!ate && (s === 'full' || s === to))) return;
+      e.preventDefault(); if (ate) return;   // o resto do gesto que mudou a altura (inércia do trackpad) não rola a lista nem a página do HA
+      acc += e.deltaY * (e.deltaMode ? 40 : 1);   // em linhas (Firefox): um dente vale inteiro
+      if (Math.abs(acc) >= 32) { acc = 0; ate = true; this._snapTo(to); }   // tremor de 2 px do trackpad não muda a altura
+    };
+    this._reopen = document.createElement('button'); this._reopen.className = 'panel btn reopen'; this._reopen.title = 'Abrir o painel'; this._reopen.setAttribute('aria-label', 'Abrir o painel');
+    this._reopen.innerHTML = `${iconSvg('chevl')}<span class="rl">Painel</span><span class="rn" title="luzes acesas"></span>`; this._reopen.hidden = true;
+    this._reopen.addEventListener('click', () => this._setPanel(true)); wrap.appendChild(this._reopen);
+    this._buildWeather();
+
+    // Cômodos (v1.5): blocos agrupados pelos cômodos reais da planta (ZONES/PLACES); filtro "Ligados · Todos" (a planta filtra por cômodo)
+    this._tiles = {};
+    const zbar = document.createElement('div'); zbar.className = 'zonebar'; zbar.setAttribute('role', 'group'); zbar.setAttribute('aria-label', 'Mostrar'); this._panes.ctl.pane.appendChild(zbar); this._zbar = zbar;
+    for (const [val, label] of [['on', 'Ligados'], ['', 'Todos']]) {
+      const c = document.createElement('button'); c.textContent = label; c.dataset.zone = val; c.setAttribute('aria-pressed', 'false');
+      c.addEventListener('click', () => this._setZone(val)); zbar.appendChild(c);
+    }
+    this._zEmpty = document.createElement('div'); this._zEmpty.className = 'zempty'; this._zEmpty.hidden = true; this._zEmpty.textContent = 'Tudo desligado · ';
+    const all = document.createElement('button'); all.textContent = 'Ver todos'; all.addEventListener('click', () => this._setZone('')); this._zEmpty.appendChild(all); this._panes.ctl.pane.appendChild(this._zEmpty);
+    const grid = document.createElement('div'); grid.className = 'tiles'; this._panes.ctl.pane.appendChild(grid); this._grid = grid;
+    this._detail = document.createElement('div'); this._detail.className = 'detail'; this._detail.hidden = true;
+    // aparelho → cômodo da planta (o _roomKeys junta a isto as luminárias e os pisos dentro de cada cômodo): a luz externa cobre a
+    // varanda, as arandelas do muro/jardim e o pátio do quintal; Quarto Casal não tem aparelho
+    const ROOMS = [
+      ['Quarto', ['quarto', 'led_quarto', 'tv', 'presenca', 'lux']],
+      ['Sala / Cozinha', ['sala', 'ac']],
+      ['Balcão', ['balcao']],
+      ['Varanda / Jardim', ['externa']],
+      ['Banheiro / Dispensa', ['banheiro']],
+      ['Garagem', ['garagem']],
+      ['Piscina', ['led_piscina', 'bomba_piscina']],
+    ];
+    this._zones = ROOMS.map(([title, keys]) => ({ title, keys })); this._zone = ''; this._onKeep = new Set();
+    // v1.8.1: blocos (Casa · Área externa, os da Vista de cima) → cômodos → aparelhos. Cada aparelho uma vez, num cômodo do bloco que ele
+    // mais serve: a luz externa ilumina Jardim e Quintal (e a Varanda) → Área externa › Jardim, "também Varanda e Quintal", e o "Desligar
+    // tudo" de lá a apaga. Sandro não é aparelho nem cômodo: fica no fim, sob um fio, fora das contas e do "tudo"
+    this._groups = []; const home = {}, list = new Intl.ListFormat('pt-BR');
+    for (const it of ITEMS) {
+      const rs = this._roomsAll().filter((r) => this._roomKeys(r).includes(it.key)), n = (r) => rs.filter((q) => q.block === r.block).length;
+      if (rs.length) home[it.key] = rs.reduce((a, r) => (n(r) > n(a) ? r : a));   // empate: o 1º na ordem dos PLACES
+    }
+    for (const b of this._places) {
+      const rooms = b.rooms.map((r) => [r, this._roomKeys(r).filter((k) => home[k] === r)]).filter(([, ks]) => ks.length);   // sem nada próprio (Quarto Casal, Varanda, Quintal, Dispensa): sem grupo
+      const keys = rooms.flatMap(([, ks]) => ks), bh = document.createElement('div'); bh.className = 'blk'; grid.appendChild(bh);   // [nome  N de M ligados] [interruptor: tudo do bloco]
+      bh.innerHTML = '<div class="bt"><b role="heading" aria-level="2"></b><small></small></div><span class="swl" aria-hidden="true">Tudo</span><button class="sw still" role="switch"></button>';
+      const bs = bh.lastChild; bh.querySelector('b').textContent = b.label; bs.setAttribute('aria-label', `Tudo em ${b.label}`); bs.addEventListener('click', () => this._swFlip(bs, keys));
+      this._groups.push({ zh: bh, zn: bh.querySelector('small'), keys, sw: bs });
+      for (const [r, ks] of rooms) {
+        const zh = this._zoneHead(r); grid.appendChild(zh); this._groups.push({ zh, zn: zh.lastChild, keys: ks });
+        for (const k of ks) {
+          grid.appendChild(this._makeTile(ITEMS.find((i) => i.key === k), r.label));
+          const o = this._roomsAll().filter((q) => q !== r && this._roomKeys(q).includes(k)).map((q) => q.label); if (!o.length) continue;   // serve a outros cômodos: diz quais
+          const t = this._tiles[k], sv = document.createElement('span'); sv.className = 'sv'; sv.textContent = ` · também ${list.format(o)}`;
+          t.small.appendChild(sv); t.tile.classList.add('wide'); t.tile.title += ` — também ${list.format(o)}`;   // linha inteira: o "também" cabe
+        }
+      }
+    }
+    const rest = ITEMS.filter((i) => !home[i.key]);   // Sandro
+    if (rest.length) { const f = document.createElement('div'); f.className = 'foot'; f.setAttribute('role', 'separator'); grid.appendChild(f); this._groups.push({ zh: f, keys: rest.map((i) => i.key) }); for (const it of rest) grid.appendChild(this._makeTile(it, 'Casa')); }
+    grid.appendChild(this._detail);
+    this._rFoot = document.createElement('div'); this._rFoot.className = 'rfoot'; this._panes.ctl.pane.appendChild(this._rFoot);   // automações do cômodo + Entrar aqui
+    this._rEnter = document.createElement('button'); this._rEnter.className = 'enter'; this._rEnter.innerHTML = `${iconSvg('walk')}<span>Entrar aqui</span>`;
+    this._rEnter.title = 'Entra neste cômodo na visão de Pessoa'; this._rEnter.addEventListener('click', () => this._enterRoom(this._room));
+    this._timers = {};
+    // Automações: rotinas rápidas do cartão + automações do HA (descobertas sozinhas)
+    const h1 = document.createElement('div'); h1.className = 'sect'; h1.textContent = 'Rotinas rápidas'; this._panes.scn.pane.appendChild(h1);
+    const rgrid = document.createElement('div'); rgrid.className = 'tiles routines'; this._panes.scn.pane.appendChild(rgrid);
+    const h2 = this._autoHead = document.createElement('div'); h2.className = 'sect'; h2.innerHTML = 'Automações do Home Assistant <small>ligar/desligar · executar agora</small>'; this._panes.scn.pane.appendChild(h2);
+    this._autoList = document.createElement('div'); this._autoList.className = 'autos'; this._panes.scn.pane.appendChild(this._autoList);
+    for (const sc of SCENES) {
+      const b = document.createElement('button'); b.className = 'tile routine';
+      b.innerHTML = `<span class="ico">${iconSvg(sc.icon)}</span><span><b>${sc.name}</b><small>${sc.desc}</small></span>`;
+      b.addEventListener('click', () => { sc.run(this._sceneCtx()); b.classList.add('flash'); setTimeout(() => b.classList.remove('flash'), 700); });
+      rgrid.appendChild(b);
+    }
+    // Atividade
+    this._feed = document.createElement('ul'); this._feed.className = 'feed'; this._panes.act.pane.appendChild(this._feed);
+    this._showTab('ctl');
+  }
+  // Clima ao vivo (Open-Meteo, sem chave) — atualiza a cada 15 min. Título: só ícone + temperatura; detalhes no topo do menu ☰
+  _buildWeather() {
+    if (!this._config.weather) return;
+    const chip = document.createElement('span'); chip.className = 'wx'; chip.hidden = true; chip.setAttribute('role', 'img'); this._clineEl.appendChild(chip);
+    const sec = document.createElement('div'); sec.className = 'msec mwx'; sec.setAttribute('role', 'group'); sec.setAttribute('aria-label', 'Clima');
+    const city = document.createElement('div'); city.className = 'mh'; city.textContent = this._config.weather_city || 'Clima';
+    const det = document.createElement('div'); det.className = 'wd'; det.textContent = 'Carregando…';
+    sec.append(city, det); this._menu.prepend(sec);
+    this._weatherUI = { chip, det };   // busca e intervalo: connectedCallback
+  }
+  async _fetchWeather() {
+    const ui = this._weatherUI; if (!ui) return;
+    const lat = this._config.latitude, lon = this._config.longitude;
+    const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,is_day&timezone=auto`;
+    try {
+      const ctrl = new AbortController(); const to = setTimeout(() => ctrl.abort(), 8000);
+      const res = await fetch(url, { signal: ctrl.signal }); clearTimeout(to);
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const j = await res.json(); const c = j.current; if (!c) throw new Error('sem dados');
+      const [iconKey, desc] = WEATHER_CODE[c.weather_code] || ['cloud', '—'];
+      const icon = !c.is_day && iconKey === 'sun' ? 'night' : !c.is_day && iconKey === 'cloudsun' ? 'cloudnight' : iconKey;
+      const t = Math.round(c.temperature_2m);
+      ui.chip.innerHTML = `${iconSvg(icon)}${t}°`; ui.chip.hidden = false;
+      ui.chip.title = desc; ui.chip.setAttribute('aria-label', `${desc}, ${t} graus`);
+      ui.det.innerHTML = '';
+      ui.det.append(`${desc} · ${t}°C · sensação ${Math.round(c.apparent_temperature)}° · vento ${Math.round(c.wind_speed_10m)} km/h`);
+      const st = this._sunTimes || {};   // nascer/pôr do sol (saiu do título)
+      const upd = document.createElement('small'); upd.innerHTML = `${st.rise && st.set ? `${iconSvg('sun')} ${fmtClock(st.rise)}–${fmtClock(st.set)} · ` : ''}atualizado ${fmtClock(Date.now())}`; ui.det.appendChild(upd);
+      this._weatherOk = Date.now();   // hora da última leitura boa (de volta à vista, só busca de novo depois de 10 min)
+    } catch (err) {
+      if (!this._weatherOk) ui.det.textContent = 'Clima indisponível';
+      console.warn('[casa3d-card] clima indisponível:', err && err.message);
+    }
+  }
+  _showTab(id) {
+    this._tab = id; if (id !== 'ctl' && this._feedDirty) this._renderFeed();
+    for (const [k, t] of Object.entries(this._panes)) { t.btn.setAttribute('aria-selected', k === id ? 'true' : 'false'); t.btn.tabIndex = k === id ? 0 : -1; t.pane.classList.toggle('active', k === id); }
+  }
+  // filtro "Ligados · Todos". Ligados é uma FOTO do momento da escolha: o que liga entra na hora, o que desliga fica embaixo do dedo
+  // até trocar de filtro, de cômodo ou recolher. Com um cômodo tocado, só os aparelhos dele (sensor vira leitura na linha de estado)
+  _setZone(z) {
+    this._zone = z || ''; if (this._zone === 'on') this._onKeep = new Set(this._onKeys());
+    for (const c of this._zbar.children) c.setAttribute('aria-pressed', c.dataset.zone === this._zone ? 'true' : 'false');
+    this._zoneHide(); this._panes.ctl.pane.scrollTop = 0;
+  }
+  _zoneHide() {
+    const ks = this._room && this._roomKeys(this._room), on = !ks && this._zone === 'on', keep = this._onKeep;
+    for (const g of this._groups) g.zh.hidden = on && !g.keys.some((k) => keep.has(k));   // bloco ou cômodo sem nada à vista some
+    for (const [k, t] of Object.entries(this._tiles)) t.tile.hidden = ks ? !ks.includes(k) || t.it.kind === 'sensor' : on && !keep.has(k);
+    this._zEmpty.hidden = !(on && !keep.size);
+  }
+  // aparelhos ligados agora (sensor e pessoa não contam)
+  _onKeys() { return ITEMS.filter((i) => i.kind !== 'sensor' && this._state[i.key] && this._state[i.key].on).map((i) => i.key); }
+  _hasDetail(it) { return it.kind !== 'sensor'; }
+  // "Quarto ›  1 de 3 ligados": abre o cômodo (na Vista de cima, aproxima ele) — na aba Cômodos e na Automações
+  _zoneHead(r) {
+    const zh = document.createElement('div'); zh.className = 'zone'; zh.dataset.room = r.label; zh.setAttribute('role', 'heading'); zh.setAttribute('aria-level', '3');
+    const zt = document.createElement('button'); zt.className = 'zt'; zt.textContent = r.label; zt.insertAdjacentHTML('beforeend', `<i aria-hidden="true">${iconSvg('chevr')}</i>`); zt.title = `Abrir ${r.label}`;
+    zt.addEventListener('click', () => (this._topView ? this._navTo(2, r.block, r) : this._showRoom(r)));
+    const zn = document.createElement('span'); zn.className = 'zn'; zh.append(zt, zn); return zh;
+  }
+  _makeTile(it, room) {
+    const tile = document.createElement('button'); tile.className = 'tile'; tile.dataset.key = it.key; tile.dataset.kind = it.kind; tile.setAttribute('aria-pressed', 'false');
+    const top = document.createElement('span'); top.className = 'top';
+    const ico = document.createElement('span'); ico.className = 'ico'; ico.innerHTML = iconSvg(it.icon); top.appendChild(ico);
+    const txt = document.createElement('span');
+    const eye = document.createElement('span'); eye.className = 'eyebrow'; eye.textContent = room || '';
+    const b = document.createElement('b'); b.textContent = it.short || it.label; tile.title = it.label; const small = document.createElement('small'); txt.append(eye, b, small);
+    // estado em três partes (estado · separador · tempo) — o texto junto continua "acesa · 30% · há 6 min"
+    const sSt = document.createElement('span'); sSt.className = 'st'; const sSep = document.createElement('span'); sSep.className = 'sep'; const sTm = document.createElement('span'); sTm.className = 'tm';
+    small.append(sSt, sSep, sTm);
+    tile.append(top, txt);
+    const t = { tile, small, it, room, sSt, sSep, sTm };
+    if (this._hasDetail(it)) {
+      const more = document.createElement('span'); more.className = 'more'; more.innerHTML = iconSvg('more'); more.title = 'Mais controles'; more.setAttribute('role', 'button'); more.tabIndex = 0;
+      more.addEventListener('click', (e) => { e.stopPropagation(); this._openDetail(it.key); });
+      more.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); e.stopPropagation(); this._openDetail(it.key); } });
+      top.appendChild(more);
+    }
+    tile.addEventListener('click', () => this._toggleItem(it.key));
+    this._tiles[it.key] = t; return tile;
+  }
+  // liga/desliga o aparelho (bloco do painel)
+  _toggleItem(key) {
+    const it = ITEMS.find((i) => i.key === key); if (!it) return;
+    const on = !!(this._state[key] && this._state[key].on);
+    if (it.kind === 'sensor') this.dispatchEvent(new CustomEvent('hass-more-info', { detail: { entityId: this.entity(key) }, bubbles: true, composed: true }));
+    else if (it.kind === 'light' || it.kind === 'switch') this._activate(key);
+    else if (it.kind === 'climate') this._svc('climate', 'set_hvac_mode', this.entity(key), { hvac_mode: on ? 'off' : 'cool' });
+    else if (it.kind === 'media') this._svc('media_player', on ? 'turn_off' : 'turn_on', this.entity(key));
+  }
+  // Faixa de detalhes (brilho/cor do LED, modo/temperatura do ar, controles da TV)
+  _openDetail(key) {
+    const it = ITEMS.find((i) => i.key === key); if (!it) return;
+    const d = this._detail; d.innerHTML = ''; d.hidden = false; d.dataset.key = key; d.dataset.kind = it.kind; this._detailKey = key;
+    d.setAttribute('role', 'group'); d.setAttribute('aria-label', `Controles: ${it.label}`);
+    this._dSw = this._dSmall = this._dModes = this._dOut = this._dPP = this._dVol = this._dTimer = this._dRange = null;
+    const head = document.createElement('div'); head.className = 'dhead'; d.appendChild(head);
+    const body = document.createElement('div'); body.className = 'dbody'; d.appendChild(body);
+    const title = document.createElement('div'); title.className = 'dtitle';
+    title.innerHTML = `<span class="ico">${iconSvg(it.icon)}</span><span><b>${it.label}</b><small></small></span>`;
+    head.appendChild(title); this._dSmall = title.querySelector('small');
+    const sw = document.createElement('button'); sw.className = 'sw'; sw.setAttribute('role', 'switch'); sw.setAttribute('aria-checked', 'false'); sw.setAttribute('aria-label', `${it.label} ligado`);
+    head.appendChild(sw); this._dSw = sw;
+    if (it.rgb || it.dim) {
+      sw.addEventListener('click', () => this._activate(key));
+      const range = document.createElement('input'); range.type = 'range'; range.min = 1; range.max = 100; range.setAttribute('aria-label', 'Brilho');
+      const st = this._state[key]; range.value = st && st.attrs && st.attrs.brightness != null ? Math.round(st.attrs.brightness / 2.55) : 100;
+      range.addEventListener('change', () => this._svc('light', 'turn_on', this.entity(key), { brightness_pct: +range.value }));
+      const rw = document.createElement('div'); rw.className = 'rng'; const ro = document.createElement('output'); rw.append(range, ro); this._dRange = { range, ro };
+      const fill = () => { range.style.setProperty('--v', `${((+range.value - 1) / 99) * 100}%`); ro.textContent = `${range.value}%`; }; range.addEventListener('input', fill); fill();
+      body.append(rw);
+      if (it.rgb) {
+        const sws = document.createElement('div'); sws.className = 'swatches';
+        for (const [name, rgb] of LED_PRESETS) { const c = document.createElement('button'); c.className = 'swatch'; c.title = name; c.setAttribute('aria-label', name); c.style.background = `rgb(${rgb.join(',')})`; c.addEventListener('click', () => this._svc('light', 'turn_on', this.entity(key), { rgb_color: rgb })); sws.appendChild(c); }
+        body.append(sws);
+      }
+    } else if (it.kind === 'climate') {
+      sw.addEventListener('click', () => this._svc('climate', 'set_hvac_mode', this.entity(key), { hvac_mode: this._state[key] && this._state[key].on ? 'off' : 'cool' }));
+      const seg = document.createElement('div'); seg.className = 'seg2'; this._dModes = {};
+      for (const m of ['cool', 'fan_only', 'dry', 'heat_cool']) { const mb = document.createElement('button'); mb.textContent = HVAC_PT[m]; mb.addEventListener('click', () => this._svc('climate', 'set_hvac_mode', this.entity(key), { hvac_mode: m })); seg.appendChild(mb); this._dModes[m] = mb; }
+      const step = document.createElement('div'); step.className = 'step';
+      const minus = document.createElement('button'); minus.textContent = '−'; minus.setAttribute('aria-label', 'Diminuir temperatura');
+      const out = document.createElement('output'); out.textContent = '—';
+      const plus = document.createElement('button'); plus.textContent = '+'; plus.setAttribute('aria-label', 'Aumentar temperatura');
+      const bump = (dd) => { const st = this._state[key]; const a = (st && st.attrs) || {}; const cur = a.temperature != null ? a.temperature : 23; const tt = clamp(cur + dd, a.min_temp || 16, a.max_temp || 31); out.textContent = `${tt}°`; this._svc('climate', 'set_temperature', this.entity(key), { temperature: tt }); };
+      minus.addEventListener('click', () => bump(-1)); plus.addEventListener('click', () => bump(1));
+      step.append(minus, out, plus); body.append(seg, step); this._dOut = out;
+    } else if (it.kind === 'media') {
+      sw.addEventListener('click', () => this._svc('media_player', this._state[key] && this._state[key].on ? 'turn_off' : 'turn_on', this.entity(key)));
+      const mk = (html, label, fn) => { const x = document.createElement('button'); x.className = 'mbtn'; x.innerHTML = html; x.setAttribute('aria-label', label); x.addEventListener('click', fn); body.appendChild(x); return x; };
+      this._dPP = mk(iconSvg('play'), 'Tocar / pausar', () => this._svc('media_player', 'media_play_pause', this.entity(key)));
+      mk('−', 'Volume −', () => this._svc('media_player', 'volume_down', this.entity(key)));
+      mk('+', 'Volume +', () => this._svc('media_player', 'volume_up', this.entity(key)));
+      const vol = document.createElement('small'); body.appendChild(vol); this._dVol = vol;
+    }
+    if (it.kind === 'light' || it.kind === 'switch') {
+      if (!it.rgb && !it.dim) sw.addEventListener('click', () => this._activate(key));
+      const tm = document.createElement('div'); tm.className = 'seg2 timerseg'; tm.setAttribute('aria-label', 'Desligar em');
+      const lab = document.createElement('span'); lab.className = 'tlab'; lab.innerHTML = `${iconSvg('timer')} desligar em`; tm.appendChild(lab);
+      for (const m of [15, 30, 60]) { const b = document.createElement('button'); b.textContent = `${m} min`; b.addEventListener('click', () => this._setTimer(key, m)); tm.appendChild(b); }
+      const cancel = document.createElement('button'); cancel.textContent = 'Nunca'; cancel.addEventListener('click', () => this._setTimer(key, 0)); tm.appendChild(cancel);
+      body.appendChild(tm); this._dTimer = tm;
+    }
+    d.onkeydown = (e) => { if (e.key === 'Escape') { e.stopPropagation(); e.preventDefault(); d.hidden = true; this._detailKey = null; const t = this._tiles[key]; const mo = t && t.tile.querySelector('.more'); if (mo) mo.focus(); } };
+    const close = document.createElement('button'); close.className = 'close'; close.innerHTML = iconSvg('close'); close.setAttribute('aria-label', 'Fechar');
+    close.addEventListener('click', () => { d.hidden = true; this._detailKey = null; }); head.appendChild(close);
+    this._showTab('ctl'); this._renderPanel(); this._snapTo('full');   // folha: os controles pedem a altura cheia (a lista rola)
+    if (!this._sheet) d.scrollIntoView({ block: 'nearest', behavior: 'smooth' });   // coluna: a página do HA mostra os controles; na folha a cheia já mostra (com ela ainda subindo, a página rolaria junto)
+  }
+  _stateText(it, st, short = false) {   // short: no bloco (o ar sem a temperatura atual, numa linha)
+    if (!st || st.unavailable) return 'indisponível';
+    const a = st.attrs || {};
+    if (it.kind === 'climate') return st.on ? `${HVAC_PT[st.state] || st.state}${a.temperature != null ? ` · ${a.temperature}°` : ''}${!short && a.current_temperature != null ? ` · ${a.current_temperature}° atual` : ''}` : `Desligado${!short && a.current_temperature != null ? ` · ${a.current_temperature}° atual` : ''}`;
+    if (it.kind === 'media') return st.state === 'playing' && a.media_title ? `${a.media_title}` : (MEDIA_PT[st.state] || st.state);
+    if (it.kind === 'sensor') return st.text || st.state;
+    const pct = st.on && a.brightness != null && (it.dim || it.rgb) ? ` · ${Math.round(a.brightness / 2.55)}%` : '';
+    return (st.on ? (it.key === 'bomba_piscina' ? 'ligada' : 'acesa') : (it.key === 'bomba_piscina' ? 'desligada' : 'apagada')) + pct;
+  }
+  _renderPanel() {
+    if (!this._tiles) return;
+    this._selRender();
+    if (this._room) {   // cabeçalho do cômodo: "N de M ligados" (sensor não conta); sem aparelho, só o aviso
+      const ks = this._roomKeys(this._room), ctl = ks.filter((k) => ITEMS.find((i) => i.key === k).kind !== 'sensor');
+      const on = ctl.filter((k) => this._state[k] && this._state[k].on).length;
+      const sens = ks.filter((k) => !ctl.includes(k)).map((k) => (k === 'presenca' ? (this._state[k] && this._state[k].on ? 'alguém aqui' : 'ninguém aqui') : this._stateText(ITEMS.find((i) => i.key === k), this._state[k])));   // sensor: leitura, não bloco
+      this._rCount.textContent = !ks.length ? 'Nenhum aparelho' : [ctl.length ? `${on} de ${ctl.length} ligados` : '', ...sens].filter(Boolean).map((s) => s.replace(/ /g, '\u00a0')).join('\u00a0· ');   // coluna estreita: quebra só entre as partes
+      this._swSet(this._rSw, ctl.length, on > 0);
+    }
+    const now = Date.now();
+    for (const [k, t] of Object.entries(this._tiles)) {
+      const st = this._state[k]; const on = !!(st && st.on);
+      t.tile.classList.toggle('on', on); t.tile.classList.toggle('unavailable', !!(st && st.unavailable));
+      t.tile.setAttribute('aria-pressed', on ? 'true' : 'false');
+      const lc = this._lastChanged[k];
+      const tm = [lc ? fmtRel(lc, now) : '', this._timerText(k, now).replace(/^ · /, '')].filter(Boolean).join(' · ');
+      const stx = this._stateText(t.it, st, true);
+      if (t.sSt.textContent !== stx) t.sSt.textContent = stx;
+      t.sSep.textContent = tm ? ' · ' : ''; if (t.sTm.textContent !== tm) t.sTm.textContent = tm;
+    }
+    for (const z of this._groups || []) {
+      const ks = z.keys.filter((k) => ITEMS.find((i) => i.key === k).kind !== 'sensor'), act = ks.filter((k) => this._state[k] && this._state[k].on).length;
+      if (z.zn) z.zn.textContent = ks.length ? `${act} de ${ks.length} ligados` : ''; z.zh.classList.toggle('some', act > 0);   // sensor e pessoa não contam
+      if (z.sw) this._swSet(z.sw, ks.length, act > 0);
+    }
+    // resumo do que está ligado ("4 luzes · Ar · TV", +N depois de 3 itens) e o filtro "Ligados · N"
+    const onK = this._onKeys(), n = onK.filter((k) => ITEMS.find((i) => i.key === k).kind === 'light').length;
+    if (this._countEl) {
+      const SHORT = { ac: 'Ar', tv: 'TV', bomba_piscina: 'Bomba' };
+      const parts = [...(n ? [`<b>${n}</b> ${n === 1 ? 'luz' : 'luzes'}`] : []), ...onK.filter((k) => ITEMS.find((i) => i.key === k).kind !== 'light').map((k) => SHORT[k] || ITEMS.find((i) => i.key === k).label)];
+      const txt = parts.length ? parts.slice(0, 3).join(' · ') + (parts.length > 3 ? ` +${parts.length - 3}` : '') : 'Tudo desligado';
+      if (this._cN !== txt) {
+        this._cN = txt; this._countEl.innerHTML = `${iconSvg('bulb')}<span>${txt}</span>`;
+        const plain = txt.replace(/<\/?b>/g, ''); this._countEl.setAttribute('aria-label', `Mostrar o que está ligado: ${plain}`); this._countSr.textContent = plain;
+        this._zbar.firstChild.innerHTML = `Ligados${onK.length ? ` <span class="n">${onK.length}</span>` : ''}`;   // selo âmbar: quantos estão ligados
+      }
+      this._countEl.classList.toggle('lit', n > 0); this._countEl.classList.toggle('any', onK.length > 0);
+    }
+    if (!this._room && this._zone === 'on' && onK.some((k) => !this._onKeep.has(k))) { onK.forEach((k) => this._onKeep.add(k)); this._zoneHide(); }   // o que ligou entra na foto
+    if (this._reopen) {   // pílula: ligados do cômodo, ou as luzes da casa
+      const rn = this._reopen.querySelector('.rn'), m = this._room ? this._roomKeys(this._room).filter((k) => onK.includes(k)).length : n;
+      if (rn) { rn.textContent = m ? String(m) : ''; rn.title = this._room ? 'ligados' : 'luzes acesas'; }
+    }
+    const key = this._detailKey;
+    if (key && this._detail && !this._detail.hidden) {
+      const st = this._state[key]; const on = !!(st && st.on); const it = ITEMS.find((i) => i.key === key);
+      if (this._dSw) this._dSw.setAttribute('aria-checked', on ? 'true' : 'false');
+      this._detail.classList.toggle('on', on);   // ícone do detalhe aceso como o do bloco
+      if (this._dSmall) this._dSmall.textContent = this._stateText(it, st) + this._timerText(key, now);
+      if (this._dTimer) for (const b of this._dTimer.querySelectorAll('button')) b.setAttribute('aria-pressed', b.textContent === (this._timers[key] ? `${this._timers[key].min} min` : 'Nunca') ? 'true' : 'false');
+      if (this._dModes) for (const [m, mb] of Object.entries(this._dModes)) mb.setAttribute('aria-pressed', st && st.state === m ? 'true' : 'false');
+      if (this._dRange && st && st.attrs && st.attrs.brightness != null && this._dRange.range.getRootNode().activeElement !== this._dRange.range) {
+        const r = this._dRange.range; r.value = Math.max(1, Math.round(st.attrs.brightness / 2.55)); r.dispatchEvent(new Event('input'));
+      }
+      if (this._dOut && st && st.attrs && st.attrs.temperature != null) this._dOut.textContent = `${st.attrs.temperature}°`;
+      if (this._dPP) this._dPP.innerHTML = iconSvg(st && st.state === 'playing' ? 'pause' : 'play');
+      if (this._dVol && st && st.attrs) this._dVol.textContent = st.attrs.volume_level != null ? `vol ${Math.round(st.attrs.volume_level * 100)}%` : '';
+    }
+    if (this._panelOpen && this._tab !== 'ctl') this._renderFeed(now); else this._feedDirty = true;   // Automações e Atividade só com a aba à vista (a troca de aba refaz)
+  }
+  _pushActivity(key, state, ts, seed = false) {
+    this._activity.push({ key, state, ts, seed });
+    this._activity.sort((a, b) => b.ts - a.ts);
+    if (this._activity.length > 40) this._activity.length = 40;
+  }
+  _renderAutos(now = Date.now()) {
+    const el = this._autoList; if (!el) return;
+    el.innerHTML = ''; this._autoHead.hidden = false;
+    if (!this._autos.length) { const e = document.createElement('div'); e.className = 'empty'; e.textContent = this._hass ? 'Nenhuma automação encontrada no Home Assistant.' : 'As automações do HA aparecem aqui quando o cartão está no Home Assistant.'; el.appendChild(e); return; }
+    // v1.8.1: por bloco → cômodo (o nome casado pelo _roomAutos), cada uma uma vez; o resto em "Outras". Dois níveis só: o rótulo da seção
+    // vira o do bloco ("Automações · Casa") e o cômodo é o mesmo "Quarto ›" da aba Cômodos, que abre ele
+    const seen = new Set(), sect = (t) => { const h = document.createElement('div'); h.className = 'sect'; h.setAttribute('role', 'heading'); h.setAttribute('aria-level', '2'); h.textContent = t; el.appendChild(h); };
+    for (const b of this._places) {
+      let first = true;
+      for (const r of b.rooms) {
+        const l = this._roomAutos(r).filter((a) => !seen.has(a)); if (!l.length) continue;
+        if (first) { sect(`Automações · ${b.label}`); first = false; }   // sem a dica "ligar/desligar · executar agora": cabe numa linha na coluna
+        el.appendChild(this._zoneHead(r)); for (const a of l) { seen.add(a); el.appendChild(this._autoRow(a, now)); }
+      }
+    }
+    const rest = this._autos.filter((a) => !seen.has(a));
+    if (rest.length && seen.size) sect('Outras automações');
+    for (const a of rest) el.appendChild(this._autoRow(a, now));
+    this._autoHead.hidden = !!seen.size;   // agrupadas: o rótulo de cada bloco toma o lugar deste
+  }
+  // linha de automação (ligar/desligar · executar agora) — na aba Automações e no painel do cômodo
+  _autoRow(a, now) {
+    const row = document.createElement('div');
+    row.innerHTML = `<span class="ico">${iconSvg('auto')}</span><span><b>${a.name}</b><small></small></span>`;
+    const sm = row.querySelector('small');
+    const sw = document.createElement('button'); sw.className = 'sw'; sw.setAttribute('role', 'switch'); sw.setAttribute('aria-label', `${a.name} ativa`);
+    const paint = () => {
+      row.className = 'auto ' + (a.on ? 'on' : 'off'); sw.setAttribute('aria-checked', a.on ? 'true' : 'false');
+      sm.textContent = `${a.last ? `executou ${fmtRel(a.last, now)} · ${fmtClock(a.last)}` : 'nunca executou'}${a.on ? '' : ' · desativada'}`;   // curto e o "há …" antes da hora: na coluna estreita as reticências cortam só a hora
+    };
+    paint();
+    sw.addEventListener('click', () => { a.on = !a.on; this._svc('automation', a.on ? 'turn_on' : 'turn_off', a.id); paint(); this._renderAutos(); });
+    const run = document.createElement('button'); run.className = 'run'; run.innerHTML = iconSvg('play'); run.title = 'Executar agora'; run.setAttribute('aria-label', `Executar ${a.name}`);
+    run.addEventListener('click', () => { this._svc('automation', 'trigger', a.id, { skip_condition: true }); row.classList.add('flash'); setTimeout(() => row.classList.remove('flash'), 600); });
+    row.append(sw, run); return row;
+  }
+  _renderFeed(now = Date.now()) {
+    if (!this._feed) return;
+    this._feedDirty = false;
+    this._renderAutos(now);
+    this._feed.innerHTML = '';
+    if (!this._activity.length) { const li = document.createElement('li'); li.className = 'empty'; li.textContent = 'Nenhuma atividade ainda.'; this._feed.appendChild(li); return; }
+    for (const ev of this._activity.slice(0, 30)) {
+      if (ev.state === 'triggered') {
+        const a = this._autos.find((x) => x.id === ev.key); const li = document.createElement('li');   // disparou: grafite
+        li.innerHTML = `<i class="d">${iconSvg('auto')}</i><span><b>${a ? a.name : ev.key}</b> disparou</span><time>${fmtClock(ev.ts)} · ${fmtRel(ev.ts, now)}</time>`;
+        this._feed.appendChild(li); continue;
+      }
+      const it = ITEMS.find((i) => i.key === ev.key); if (!it) continue;
+      const li = document.createElement('li');
+      const on = it.kind === 'climate' ? ev.state !== 'off' : it.kind === 'media' ? (ev.state === 'playing' || ev.state === 'on' || ev.state === 'paused') : ev.state === 'on';
+      li.classList.toggle('on', on && it.kind !== 'sensor');   // âmbar só no que acendeu/ligou (sensor é leitura)
+      let what;
+      if (it.kind === 'climate') what = ev.state === 'off' ? 'desligado' : `→ ${HVAC_PT[ev.state] || ev.state}`;
+      else if (it.kind === 'media') what = `→ ${MEDIA_PT[ev.state] || ev.state}`;
+      else if (it.kind === 'sensor') what = it.key === 'presenca' ? (ev.state === 'on' ? '→ alguém no quarto' : '→ ninguém') : it.key === 'pessoa' ? (ev.state === 'home' ? '→ chegou em casa' : '→ saiu') : `→ ${Math.round(+ev.state)} lx`;
+      else what = ev.state === 'on' ? (it.key === 'bomba_piscina' ? 'ligada' : 'acesa') : (it.key === 'bomba_piscina' ? 'desligada' : 'apagada');
+      li.innerHTML = `<i class="d">${iconSvg(it.icon)}</i><span><b>${it.label}</b> ${what}</span><time datetime="${new Date(ev.ts).toISOString()}">${fmtClock(ev.ts)} · ${fmtRel(ev.ts, now)}</time>`;
+      this._feed.appendChild(li);
+    }
+  }
+  _flashRow(key) {
+    const t = this._tiles && this._tiles[key]; if (!t || !this._panelOpen) return;
+    this._showTab('ctl'); if (t.tile.hidden) this._setZone(''); t.tile.classList.add('flash');
+    const p = t.tile.closest('.pane'), r = t.tile.getBoundingClientRect(), q = p.getBoundingClientRect();
+    if (r.top < q.top || r.bottom > q.bottom) p.scrollBy({ top: r.top - q.top - 12, behavior: 'smooth' });   // só a lista rola, nunca a página do HA (fora da cheia ela é clip e fica)
+    setTimeout(() => t.tile.classList.remove('flash'), 900);
+  }
+
+  // ---- Loop ----
+  _resize(fly = false) {
+    if (!this._renderer) return;
+    const w = Math.max(1, this.clientWidth), h = Math.max(1, this.clientHeight);
+    // Resolução cheia (parado): até o pixel ratio da tela, com teto por nível (alta 2,8–3,5 Mpx · media 2,4 · leve 2,0 · min 1,4)
+    const strong = this._q === 'alta' && Casa3DCard._strongGPU();
+    const [cap, px] = this._q === 'alta' ? (strong ? [2.5, 3.5e6] : [2, 2.8e6]) : this._q === 'media' ? [2, 2.4e6] : this._min ? [1.5, 1.4e6] : [2, 2.0e6];
+    const dpr = Math.max(1, Math.min(window.devicePixelRatio || 1, cap, Math.sqrt(px / (w * h))));
+    // mexer no tamanho do canvas o apaga (quadro preto até o próximo desenho): só quando muda de verdade — o painel e a folha
+    // chamam o _resize a cada passo só para reenquadrar a câmera —, e aí redesenha na hora (fim da função)
+    const r = this._renderer, sz = r.getSize(_rsz), changed = dpr !== this._dprFull || sz.x !== w || sz.y !== h;
+    if (changed) { this._dprFull = dpr; this._lowRes = false; r.setPixelRatio(dpr); r.setSize(w, h, false); }   // o governador (movimento) escala a partir daqui
+    this._layoutHud(w);
+    // Com o painel lateral aberto (desktop/tablet deitado), a cena é enquadrada na área à direita dele
+    // Na folha de baixo (celular/tablet em pé), na faixa entre o cabeçalho (T) e a parte VISÍVEL dela (B)
+    const open = this._panelOpen && this._dock && !this._dock.hidden;
+    if (open && this._sheet && !this._sprRaf && !this._dragging && this._dock.dataset.snap) this._sideX(this._snaps()[this._dock.dataset.snap]);   // conteúdo mudou de altura: fica no mesmo detente
+    let P = open && !this._sideOverlay ? this._sideW + 20 : 0, B = open && this._sheet ? Math.max(0, this._wrap.clientHeight - this._dock.offsetTop - (this._sprRaf ? this._sprGoal() : this._sprX || 0)) : 0, T = B ? this._hudH || 0 : 0;
+    if (this._maq) { const bot = w < 700; P = this._mpOpen && !bot ? -((this._mpW || 316) + 28) : 0; B = this._mpOpen && bot ? (this._mpH || 0) : 0; T = 0; }   // maquete: painel à direita (desktop) ou folha embaixo (celular); P negativo = faixa livre à direita
+    const fz = this._selBand; if (!this._maq && fz && fz[3] === w && fz[4] === h) [P, B, T] = fz;   // balão aberto: o painel mudou de conteúdo, a cena fica onde o dedo está
+    const p0 = this._pNow, vh = Math.max(160, h - B - T); this._vb = [B, T, w, h]; this._viewP(P);   // já na faixa final: o _resetView enquadra por ela
+    const u = 2 * Math.tan(this._camera.fov * Math.PI / 360) / vh;   // rótulos (sem perspectiva): px de tela → escala
+    for (const s of this._labels || []) s.scale.set(s.userData.px[0] * u, s.userData.px[1] * u, 1);
+    if (!this._orbit.touched) this._resetView(fly);   // fly: a folha assentou, a câmera desliza até o novo quadro
+    this._pA = fly && !this._reduced && p0 != null && p0 !== P ? [p0, P, 0] : null;   // a borda do painel assentou: a faixa da cena desliza em 0,25 s (_frame), sem pulo
+    if (this._pA) this._viewP(p0);
+    this._orbit.dirty = true;
+    if (changed && this._raf && !this._busy) r.render(this._scene, this._camera);   // o ResizeObserver roda depois do quadro: sem isso a tela piscaria preta
+  }
+  _viewP(P) {   // câmera na faixa livre: P px à esquerda (coluna), T em cima e B embaixo (folha); B, T e o tamanho vêm do _resize
+    const [B, T, w, h] = this._vb, vw = Math.max(160, w - Math.abs(P)), vh = Math.max(160, h - B - T), c = this._camera;
+    this._pNow = P; c.aspect = vw / vh; if (this._walkOn) c.fov = this._walkFov();
+    if (P || B) c.setViewOffset(vw, vh, P < 0 ? 0 : -P, -T, w, h); else c.clearViewOffset();   // P < 0: painel à direita, a cena fica à esquerda dele
+    c.updateProjectionMatrix();
+  }
+  // ---- Governador de qualidade ----
+  // O nível (alta/media/leve/min) é fixo na construção; em tempo de execução só a resolução se adapta ao TEMPO REAL DE QUADRO:
+  // em movimento a escala cai/sobe com histerese (2 janelas lentas de 300 ms para baixar, 4 rápidas para subir); ao parar vem UM
+  // quadro nítido (resolução cheia ou maior, se sobra fôlego) cujo custo é medido no rAF seguinte — nunca se desenha só para medir.
+  // Só no `auto` (quality manual vale como escolhido) e quando nem a escala mínima aguenta, desce uma escada (sombras, luzes).
+  _govInit() {
+    const t = GOV[this._q] || GOV.leve;
+    this._gov = { tier: this._q, auto: this._config.quality === 'auto', moveScale: t.move, moveMin: t.min, moveMax: t.max, idleScale: 1, idleMax: t.idleMax, idleMin: t.idleMin,
+      ft: 0, lastAdj: 0, slowWin: 0, fastWin: 0, rung: 0, lastStep: 0, sharpAt: 0, sharpPending: false, sharpFast: 0, slow: 0, slowIdle: 0,
+      t0: typeof performance !== 'undefined' ? performance.now() : 0 };
+    this._moveScale = t.move;
+  }
+  _govIdleMax() {
+    const g = this._gov, w = Math.max(1, this.clientWidth), h = Math.max(1, this.clientHeight), d = this._dprFull || 1;
+    return Math.max(g.idleMin, Math.min(g.idleMax, 3 / d, Math.sqrt(4e6 / (w * h * d * d))));   // nunca acima de 3× DPR nem de 4 Mpx
+  }
+  _govPR(v) {
+    const r = this._renderer; if (Math.abs(r.getPixelRatio() - v) < 0.01) return false;
+    r.setPixelRatio(v); return true;
+  }
+  _govFrame(now, dirty) {
+    const g = this._gov || (this._govInit(), this._gov), o = this._orbit;
+    const ft = now - (this._lastT || now); this._lastT = now;
+    if (o.moving) {
+      this._lastMove = now; g.sharpPending = false;
+      if (!this._lowRes) { this._lowRes = true; g.ft = 0; if (this._govPR(this._dprFull * g.moveScale)) dirty = true; }
+      else if (ft > 0) {
+        g.ft = g.ft ? g.ft * 0.8 + ft * 0.2 : ft;
+        if (now - g.lastAdj > 300) {
+          g.lastAdj = now;
+          g.slowWin = g.ft > 40 ? g.slowWin + 1 : 0; g.fastWin = g.ft < 22 ? g.fastWin + 1 : 0;
+          if (g.slowWin >= 2) { if (!this._wrap.classList.contains('glass')) g.moveScale = Math.max(g.moveMin, g.moveScale * 0.85); else if (this._govSettled(now)) this._wrap.classList.remove('glass'); g.slowWin = 0; }   // lento: 1º sai o vidro (também com quality fixo), depois a resolução; nos 20 s da entrada (picos de shader e textura) nenhum dos dois
+          if (g.fastWin >= 4) { g.moveScale = Math.min(g.moveMax, g.moveScale * 1.1); g.fastWin = 0; }
+          // escada (só auto): na escala mínima e ainda < 15 quadros/s por ~1,5 s — nunca nos 20 s após carregar
+          // (compilação de shaders e texturas subindo dão picos que não dizem nada do aparelho)
+          g.slow = g.moveScale <= g.moveMin + 0.01 && g.ft > 66 ? g.slow + 1 : 0;
+          if (g.slow >= 5 && now - g.lastStep > 4000 && this._govSettled(now)) this._govStepDown(now);   // recompila (_busy, sem desenhar): o canvas não muda neste quadro
+          else if (this._govPR(this._dprFull * g.moveScale)) dirty = true;
+        }
+      }
+    } else if (this._lowRes && now - (this._lastMove || 0) > 180) {
+      // parou: um quadro nítido, na escala parada (medida abaixo); com `dirty` a cena é redesenhada uma vez
+      this._lowRes = false; this._govPR(Math.min(this._dprFull * Math.min(g.idleScale, this._govIdleMax()), 3));
+      dirty = true; g.sharpAt = now; g.sharpPending = true; g.ft = 0;
+    } else if (g.sharpPending) {
+      // o rAF seguinte ao quadro nítido só chega depois de o navegador apresentá-lo: o intervalo é o custo real (CPU + GPU)
+      g.sharpPending = false;
+      if (!dirty) this._govSharp(now - g.sharpAt);
+    }
+    this._ft = g.ft; this._moveScale = g.moveScale; this._lastAdj = g.lastAdj;   // espelhos (ferramentas de teste)
+    return dirty;
+  }
+  _govSharp(ms) {
+    const g = this._gov;
+    if (ms > 250) {
+      g.sharpFast = 0;
+      if (this._wrap.classList.contains('glass')) { if (this._govSettled(performance.now())) this._wrap.classList.remove('glass'); }   // quadro nítido lento: o vidro sai antes da resolução (passados os picos da entrada)
+      else if (g.idleScale > g.idleMin + 0.01) g.idleScale = Math.max(g.idleMin, g.idleScale * 0.85);   // o próximo quadro nítido é mais leve: sem travar a página
+      else if (g.auto && ms > 400 && ++g.slowIdle >= 3 && performance.now() - g.lastStep > 4000 && this._govSettled(performance.now())) this._govStepDown(performance.now());
+    } else if (ms < 30) {
+      g.slowIdle = 0;
+      if (++g.sharpFast >= 2) { g.idleScale = Math.min(this._govIdleMax(), g.idleScale * 1.15); g.sharpFast = 0; }   // sobra fôlego: resolução acima da cheia
+    } else { g.sharpFast = 0; g.slowIdle = 0; }
+  }
+  // Degraus (só no auto): 1 sem sombras das luzes pontuais e sem reflexo de ambiente · 2 menos luzes reais · 3 sem supersampling
+  // parado e escala mínima menor em movimento. A sombra do sol e a resolução cheia parada NUNCA caem. Não voltam sozinhos
+  _govSettled(now) { return !this._busy && now - (this._gov.t0 || 0) > 20000; }
+  _govStepDown(now) {
+    const g = this._gov; if (!g.auto || g.rung >= 3) return;
+    g.rung++; g.lastStep = now; g.slow = g.slowIdle = 0; this._wrap.classList.remove('glass');
+    if (g.rung === 1) {
+      let ch = !!this._scene.environment;   // no leve/min já não há ambiente nem sombras pontuais: nada a recompilar
+      for (const rt of this._items.values()) for (const { L } of rt.lights || []) if (L.castShadow) { L.castShadow = false; if (L.shadow.map) L.shadow.map.dispose(); ch = true; }
+      this._scene.environment = null; this._envDay = this._envNight = null;
+      if (ch) this._precompile();
+    } else if (g.rung === 2) this._shrinkLights();
+    else { g.idleMax = Math.min(g.idleMax, 1); g.idleScale = Math.min(g.idleScale, 1); g.moveMin = Math.max(0.3, g.moveMin - 0.05); }
+    console.info(`[casa3d-card] governador: degrau ${g.rung} — ${this.getQuality().lights} luzes reais`);
+    if (this._orbit) this._orbit.dirty = true;
+  }
+  // PC lento demais (governador, só no `auto`): cada item da tabela fica com MIN_LIGHTS[item] luzes (as com sombra primeiro),
+  // o resto soma a intensidade na vizinha. Recompila uma vez, em paralelo.
+  _shrinkLights() {
+    let n = 0;
+    for (const key in MIN_LIGHTS) {
+      const rt = this._items.get(key); if (!rt || !rt.lights || !rt.lights.length) continue;
+      const all = rt.lights.slice().sort((a, b) => (b.L.castShadow ? 1 : 0) - (a.L.castShadow ? 1 : 0)), kept = all.slice(0, MIN_LIGHTS[key]);
+      for (const d of all.slice(MIN_LIGHTS[key])) {
+        const near = kept.slice().sort((a, b) => a.L.position.distanceTo(d.L.position) - b.L.position.distanceTo(d.L.position))[0];
+        if (near) { const f = Math.sqrt((near.i + d.i) / near.i); near.i += d.i; near.L.distance *= Math.min(1.35, f); }
+        this._scene.remove(d.L); if (d.L.shadow && d.L.shadow.map) d.L.shadow.map.dispose(); n++;
+      }
+      rt.lights = kept;
+    }
+    console.info(`[casa3d-card] PC lento: ${n} luzes reais a menos`);
+    if (n) this._precompile();
+  }
+  // estado do governador (testes/demo)
+  getQuality() {
+    const g = this._gov || {};
+    let lights = 0; for (const rt of this._items.values()) lights += (rt.lights || []).length;
+    return { tier: this._q, auto: !!g.auto, rung: g.rung || 0, moveScale: g.moveScale, idleScale: g.idleScale, ftEMA: g.ft, lights };
+  }
+  _start() {
+    if (this._raf || !this._renderer) return;
+    this._clock.start();
+    const tick = () => { this._raf = requestAnimationFrame(tick); if (!this._sizing) this._frame(); else this._clock.getDelta(); };   // ajustando a largura: a cena espera (sem acumular o tempo: o 1º quadro depois não pula)
+    this._raf = requestAnimationFrame(tick);
+  }
+  _stop() { if (this._raf) cancelAnimationFrame(this._raf); this._raf = 0; this._clock.stop(); }
+
+  _frame() {
+    if (this._busy) return;   // compilando shaders (_precompile)
+    const dt = Math.min(this._clock.getDelta(), 0.1);
+    const t = this._clock.elapsedTime;
+    let dirty = this._walkOn ? this._walk.update(dt) : this._orbit.update(dt);
+    if (this._pA) { const a = this._pA, k = Math.min(1, (a[2] += dt) / 0.25); this._viewP(a[0] + (a[1] - a[0]) * (1 - (1 - k) ** 3)); if (k === 1) this._pA = null; dirty = true; }   // faixa da cena deslizando até a nova borda do painel
+    if (this._walkOn && this._doorsTick(dt)) dirty = true;   // portas abrindo/fechando na visão de pessoa
+    if (this._walkOn && this._mkTick(t)) dirty = true;        // marcador do destino pulsando
+    if (this._walkOn && this._orbit.moving) this._walkHint.classList.remove('show');   // primeiro passo / olhada: a dica de comandos sai
+    const k = 1 - Math.exp(-dt * 7);
+    // Ambiente dia/noite — em "auto" segue a elevação do sol (transição suave no crepúsculo)
+    this._updateTime();
+    const elev = this._sunInfo ? this._sunInfo.elevation : -20;
+    const nightGoal = this._mode === 'night' ? 1 : this._mode === 'day' ? 0 : clamp((6 - elev) / 10, 0, 1);
+    if (this._mode === 'auto' && this._night !== (nightGoal > 0.5)) { this._night = nightGoal > 0.5; this._nvAvail(this._night); }
+    if (this._nightLevel === undefined) this._nightLevel = nightGoal;
+    if (Math.abs(this._nightLevel - nightGoal) > 0.002) { this._nightLevel += (nightGoal - this._nightLevel) * k; dirty = true; this._needShadow = true; }
+    else if (this._nightLevel !== nightGoal) { this._nightLevel = nightGoal; dirty = true; this._needShadow = true; }
+    const maq = !!this._maq, nl = maq ? this._nightLevel * 0.2 : this._nightLevel;   // maquete: a casa segue clara (estúdio); a noite só escurece um pouco
+    // Visão noturna: à noite, luz de lua mais forte + ambiente frio para a casa inteira ficar legível
+    const nvGoal = this._nightVision ? 1 : 0;
+    if (this._nvLevel === undefined) this._nvLevel = nvGoal;
+    if (Math.abs(this._nvLevel - nvGoal) > 0.002) { this._nvLevel += (nvGoal - this._nvLevel) * k; dirty = true; }   // só intensidades: as sombras ficam
+    else if (this._nvLevel !== nvGoal) { this._nvLevel = nvGoal; dirty = true; }
+    const nv = maq ? 0 : this._nvLevel, L = THREE.MathUtils.lerp;
+    this._hemi.intensity = L(1.1, L(0.22, 0.45, nv), nl);
+    this._hemi.color.setHex(0xe4ecf5).lerp(new THREE.Color(0x4a62a8), nl);
+    this._hemi.groundColor.setHex(0xd9d0c2).lerp(new THREE.Color(0x1a2038), nl);
+    this._amb.intensity = L(0.35, L(0.14, 0.42, nv), nl);
+    this._amb.color.setHex(0xdde4ee).lerp(new THREE.Color(0x6b7aa8), nl);
+    if (maq) { this._hemi.intensity = 1.75; this._hemi.color.setHex(0xfffaf3); this._hemi.groundColor.setHex(0xe9e0d2); this._amb.intensity = 0.5; this._amb.color.setHex(0xfff6ea); }   // estúdio quente e suave
+    // sol: posição pelo azimute/elevação reais (no dia); cor esquenta perto do horizonte
+    const az = ((this._sunInfo ? this._sunInfo.azimuth : 90) - (this._config.orientation - 180)) * Math.PI / 180;
+    const elr = Math.max(elev, 4) * Math.PI / 180;
+    const sunDir = new THREE.Vector3(Math.sin(az) * Math.cos(elr), Math.sin(elr), -Math.cos(az) * Math.cos(elr));
+    if (this._mode === 'day') sunDir.copy(this._sunPos).normalize();
+    const sunPos = this._sun.target.position.clone().addScaledVector(sunDir, 30);
+    const warm = clamp(1 - Math.abs(elev) / 14, 0, 1);   // quente só perto do horizonte: com o sol bem abaixo dele, a transição para a noite fica azulada (não bordô)
+    const dayCol = maq ? new THREE.Color(0xfff0dc) : this._sunCol.clone().lerp(new THREE.Color(0xff9848), warm * 0.85);
+    const dayInt = maq ? 2.4 : 3.2 * clamp(0.25 + Math.sin(Math.max(elev, 0) * Math.PI / 180) * 1.5, 0.25, 1);
+    this._sun.intensity = L(dayInt, L(0.5, 0.7, nv), nl);
+    if (maq) this._sun.position.set(-9, 24, 14); else this._sun.position.lerpVectors(sunPos, this._moonPos, nl);   // maquete: luz-chave fixa
+    this._sun.color.copy(dayCol).lerp(this._moonCol, nl);
+    if (!this._lastSunPos || this._lastSunPos.distanceToSquared(this._sun.position) > 0.01) { this._lastSunPos = this._sun.position.clone(); this._needShadow = true; dirty = true; }
+    const dusk = !maq && this._mode === 'auto' ? clamp(1 - Math.abs(elev) / 9, 0, 1) * 0.95 : 0;
+    this._skyDusk.material.opacity = dusk;
+    this._skyDay.material.opacity = (1 - nl) * (1 - dusk * 0.85);
+    if (!maq) this._groundMat.color.setHex(0xc9ced6).lerp(new THREE.Color(0x121828), nl);   // chão chapado cinza-claro neutro (sem cara de grama): escurece à noite, para as luzes acesas virarem o centro da imagem
+    this._hemi.color.lerp(new THREE.Color(0xffb27a), dusk * 0.5 * (1 - nl));
+    this._scene.fog.color.setHex(0xd6e4f2).lerp(new THREE.Color(0xf0a070), dusk * 0.6).lerp(new THREE.Color(0x121c4a), nl);   // neblina azul-profundo (some no céu de entardecer)
+    if (this._envDay) {
+      const env = nl > 0.5 ? this._envNight : this._envDay;
+      if (this._scene.environment !== env) this._scene.environment = env;
+      this._scene.environmentIntensity = L(0.55, L(0.35, 0.7, nv), nl);
+    }
+    // Luzes (fade) e materiais emissivos
+    let ambient = false;   // animação ociosa (TV pulsando, água escoando)
+    for (const it of ITEMS) {
+      const rt = this._items.get(it.key); if (!rt) continue;
+      const goal = rt.target * (rt.brightScale || 1);
+      if (Math.abs(rt.level - goal) > 0.003) { rt.level += (goal - rt.level) * k; dirty = true; }
+      else if (rt.level !== goal) { rt.level = goal; dirty = true; }
+      const lv = rt.level;
+      // luz de dia: as lâmpadas pesam menos na cena
+      const dayScale = maq ? 0.55 : THREE.MathUtils.lerp(0.45, 1, nl);
+      for (const { L: pl, i } of rt.lights || []) { pl.intensity = i * lv * dayScale; pl.color.copy(rt.color); }
+      for (const f of rt.fixtures || []) if (f.material && f.material.emissive && it.kind === 'light') f.material.emissiveIntensity = lv * 1.6;
+      if (rt.sancas) for (const m of rt.sancas) m.emissiveIntensity = lv * 3.4;
+      for (const { sp, base } of rt.glows || []) { sp.material.opacity = lv * base; sp.material.color.copy(rt.color); sp.visible = lv > 0.01; }
+      if (it.key === 'led_piscina') { this._waterU.ledIntensity.value = lv * 0.75; materials().basin.emissiveIntensity = 0.12 + lv * 0.35; }
+      if (it.key === 'bomba_piscina' && rt.led) rt.led.material.emissiveIntensity = lv * 2.5;
+      if (it.key === 'tv') {
+        const pulse = (this._reduced ? 1 : 0.85 + 0.15 * Math.sin(t * 2.1)) * lv;
+        rt.screenMat.emissiveIntensity = pulse * 1.4;
+        rt.light.intensity = pulse * 2.5;
+        if (lv > 0.01 && !this._reduced) ambient = true;
+      }
+      if (it.kind === 'climate' && rt.ledMat) {
+        const c = rt.hvac === 'cool' ? 0x67d3ff : rt.hvac === 'heat' ? 0xff8a5b : 0x8ef0b0;
+        rt.ledMat.emissive.setHex(c); rt.ledMat.emissiveIntensity = lv * 2.2;
+      }
+    }
+    // Água: ondula sempre (devagar); com a bomba ligada, mais rápido
+    const pump = this._items.get('bomba_piscina');
+    if (!this._reduced) {
+      const sp = 1 + (pump ? pump.level * 1.6 : 0);
+      this._waterTime = (this._waterTime || 0) + dt * sp;
+      const U = this._waterU; U.time.value = this._waterTime;
+      const bm = materials().basin.emissiveMap; bm.offset.x += dt * 0.014 * sp; bm.offset.y -= dt * 0.009 * sp;
+      // luz e céu do momento (dia/entardecer/noite) refletidos na água
+      U.sunDir.value.copy(this._sun.position).sub(this._sun.target.position).normalize();
+      U.sunColor.value.copy(this._sun.color); U.sunIntensity.value = clamp(this._sun.intensity / 3.2, 0.12, 1) * (0.55 + 0.45 * (1 - nl));
+      U.skyTop.value.setHex(0x4f8fd6).lerp(new THREE.Color(0xd08a70), dusk * 0.5).lerp(new THREE.Color(0x0b1226), nl);
+      U.skyHorizon.value.setHex(0xe6eef6).lerp(new THREE.Color(0xffa070), dusk * 0.8).lerp(new THREE.Color(0x1a2340), nl);
+      if (maq) { U.deepColor.value.setHex(0x0f8f93); U.shallowColor.value.setHex(0x58d6cc); U.ledColor.value.setHex(0x6ffbee); }   // maquete: água turquesa translúcida, luz subaquática
+      else {
+      U.deepColor.value.setHex(0x0b3f78).lerp(new THREE.Color(0x061b36), nl * 0.85);
+      U.shallowColor.value.setHex(0x2a9bc0).lerp(new THREE.Color(0x0f3a58), nl * 0.85);
+      }
+      ambient = true; this._waterFast = sp > 1.5;
+    }
+    if (this._needShadow) { this._renderer.shadowMap.needsUpdate = true; this._needShadow = false; dirty = true; }
+    if (this._hvLight) { const g = this._hvGoal || 0, d = g - this._hvLight.intensity; if (Math.abs(d) > 0.05) { this._hvLight.intensity += d * (this._reduced ? 1 : 1 - Math.exp(-dt * 9)); dirty = true; } else if (this._hvLight.intensity !== g) { this._hvLight.intensity = g; dirty = true; } }   // maquete: o cômodo sob o mouse acende suave
+    if (dirty && this._hotList && this._hotList.length) this._hotPlace();
+    if (dirty && this._labels) this._declutter();
+    if (dirty && (this._sel || this._selGone)) this._selPlace();   // o balão do aparelho acompanha a câmera
+    // rótulos esmaecem (~150 ms) em vez de piscar ao aparecer/sumir no giro e no zoom
+    for (const s of this._labels || []) {
+      const m = s.material, a = s.userData.alvo || 0;
+      if (Math.abs(a - m.opacity) > 0.01) { m.opacity += (a - m.opacity) * (this._reduced ? 1 : 1 - Math.exp(-dt * 14)); dirty = true; }
+      else if (m.opacity !== a) { m.opacity = a; dirty = true; }
+      s.visible = m.opacity > 0.01;
+    }
+    // Todos os níveis: girando/aproximando desenha na resolução que o tempo real de quadro permite; parou → um quadro nítido (governador)
+    const now = performance.now();
+    dirty = this._govFrame(now, dirty);
+    if (this._busy) return;   // o governador acabou de pedir recompilação (_shrinkLights)
+    // Só animação ociosa (água/TV): ~20 q/s (30 com a bomba; leve 10, min 5) e nada com a aba ou o cartão fora da tela
+    const visible = !(typeof document !== 'undefined' && document.hidden) && this._onScreen !== false;
+    if (dirty || (ambient && visible && now - (this._lastIdle || 0) > (this._waterFast ? (this._lite ? 40 : 30) : this._min ? 195 : this._lite ? 95 : 45))) {
+      if (!dirty) this._lastIdle = now;
+      this._renderer.render(this._scene, this._camera);
+    }
+  }
+  // rótulos sem sobreposição: projeta cada um na tela e, por prioridade (cômodo com algo ligado, depois o maior), esconde o que
+  // encostaria num já aceito; ao aproximar o zoom eles voltam sozinhos (o _frame esmaece até o alvo)
+  _declutter() {
+    this._camera.updateMatrixWorld();   // o orbit só fez lookAt: sem isto a projeção usaria a câmera do quadro anterior
+    const on = this._labelsOn && !this._walkOn && !(this._nav && this._nav.room), v = new THREE.Vector3(), w = this.clientWidth, h = this.clientHeight, ok = [];
+    const pri = (s) => { const z = ZONES[s.userData.zone], st = this._state[z.item]; return (st && st.on ? 1e3 : 0) + z.w * z.d; };
+    for (const s of [...this._labels].sort((a, b) => pri(b) - pri(a))) {
+      s.userData.alvo = 0; if (!on) continue;
+      v.copy(s.position).project(this._camera);
+      const x = (v.x + 1) * w / 2, y = (1 - v.y) * h / 2, hw = s.userData.px[0] / 2 + 3;
+      if (ok.some(([x2, y2, hw2]) => Math.abs(x - x2) < hw + hw2 && Math.abs(y - y2) < 24)) continue;
+      s.userData.alvo = 1; ok.push([x, y, hw]);
+    }
+  }
+}
+
+if (!customElements.get('casa3d-card')) customElements.define('casa3d-card', Casa3DCard);
+window.customCards = window.customCards || [];
+if (!window.customCards.some((c) => c.type === 'casa3d-card')) {
+  window.customCards.push({ type: 'casa3d-card', name: 'Casa 3D', description: 'Planta 3D interativa da casa; luzes ligadas às entidades do Home Assistant.', preview: false });
+}
+console.info(`%c CASA3D-CARD %c v${VERSION} `, 'background:#0a0f1e;color:#ffc46b;font-weight:700', 'background:#ffc46b;color:#0a0f1e;font-weight:700');

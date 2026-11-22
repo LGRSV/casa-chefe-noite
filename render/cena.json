@@ -1,0 +1,350 @@
+{
+ "lights": [
+  {
+   "item": "quarto",
+   "room": "quarto",
+   "type": "PointLight",
+   "pos": [
+    5.2,
+    2.55,
+    2.1
+   ],
+   "color": 16761223,
+   "i": 30,
+   "distance": 6.5,
+   "decay": 2
+  },
+  {
+   "item": "led_quarto",
+   "room": "quarto",
+   "type": "PointLight",
+   "pos": [
+    4.15,
+    1,
+    0.5
+   ],
+   "color": 16758405,
+   "i": 7,
+   "distance": 4.5,
+   "decay": 2
+  },
+  {
+   "item": "sala",
+   "room": "sala",
+   "type": "PointLight",
+   "pos": [
+    8.45,
+    2.55,
+    2.1
+   ],
+   "color": 16764582,
+   "i": 42,
+   "distance": 7.5,
+   "decay": 2
+  },
+  {
+   "item": "balcao",
+   "room": "balcao",
+   "type": "PointLight",
+   "pos": [
+    11.4,
+    2.55,
+    1.7
+   ],
+   "color": 16765099,
+   "i": 20,
+   "distance": 4.5,
+   "decay": 2
+  },
+  {
+   "item": "externa",
+   "room": "varanda",
+   "type": "PointLight",
+   "pos": [
+    10.4,
+    2.5,
+    5.2
+   ],
+   "color": 16763029,
+   "i": 70,
+   "distance": 7.425000000000001,
+   "decay": 2
+  },
+  {
+   "item": "banheiro",
+   "room": "banheiro",
+   "type": "PointLight",
+   "pos": [
+    1.2,
+    2.5,
+    7.5
+   ],
+   "color": 16765359,
+   "i": 24,
+   "distance": 5.13,
+   "decay": 2
+  },
+  {
+   "item": "garagem",
+   "room": "garagem",
+   "type": "PointLight",
+   "pos": [
+    1.5,
+    2.5,
+    13.3
+   ],
+   "color": 16764582,
+   "i": 18,
+   "distance": 6.5,
+   "decay": 2
+  },
+  {
+   "item": "led_piscina",
+   "room": "piscina",
+   "type": "PointLight",
+   "pos": [
+    6.5,
+    -0.55,
+    8.34
+   ],
+   "color": 6091492,
+   "i": 27,
+   "distance": 6.075,
+   "decay": 2
+  }
+ ],
+ "defOn": [
+  "quarto",
+  "led_quarto",
+  "sala",
+  "led_piscina",
+  "bomba_piscina",
+  "ac",
+  "tv"
+ ],
+ "rooms": [
+  {
+   "id": "quarto_casal",
+   "label": "Quarto Casal",
+   "items": [],
+   "box": [
+    0,
+    0,
+    3.6,
+    4.2
+   ],
+   "center": [
+    1.8,
+    1.2,
+    2.1
+   ]
+  },
+  {
+   "id": "quarto",
+   "label": "Quarto",
+   "items": [
+    "quarto",
+    "led_quarto",
+    "tv",
+    "presenca",
+    "lux"
+   ],
+   "box": [
+    3.6,
+    0,
+    6.800000000000001,
+    4.2
+   ],
+   "center": [
+    5.2,
+    1.2,
+    2.1
+   ]
+  },
+  {
+   "id": "sala",
+   "label": "Sala / Cozinha",
+   "items": [
+    "sala",
+    "ac"
+   ],
+   "box": [
+    6.8,
+    0,
+    10.3,
+    4.2
+   ],
+   "center": [
+    8.55,
+    1.2,
+    2.1
+   ]
+  },
+  {
+   "id": "balcao",
+   "label": "Balcão",
+   "items": [
+    "balcao"
+   ],
+   "box": [
+    10.3,
+    0,
+    12.5,
+    4.2
+   ],
+   "center": [
+    11.4,
+    1.2,
+    2.1
+   ]
+  },
+  {
+   "id": "varanda",
+   "label": "Varanda",
+   "items": [
+    "externa"
+   ],
+   "box": [
+    0,
+    4.2,
+    12.5,
+    6.2
+   ],
+   "center": [
+    6.25,
+    1.2,
+    5.2
+   ]
+  },
+  {
+   "id": "piscina",
+   "label": "Piscina",
+   "items": [
+    "led_piscina",
+    "bomba_piscina"
+   ],
+   "box": [
+    2.9,
+    7.2,
+    10.9,
+    12.4
+   ],
+   "center": [
+    6.9,
+    1.2,
+    9.8
+   ]
+  },
+  {
+   "id": "jardim",
+   "label": "Jardim",
+   "items": [
+    "externa"
+   ],
+   "box": [
+    10.9,
+    6.2,
+    13.4,
+    12.4
+   ],
+   "center": [
+    12.15,
+    1.2,
+    9.3
+   ]
+  },
+  {
+   "id": "quintal",
+   "label": "Quintal",
+   "items": [
+    "externa"
+   ],
+   "box": [
+    3,
+    12.4,
+    13.4,
+    16
+   ],
+   "center": [
+    8.2,
+    1.2,
+    14.2
+   ]
+  },
+  {
+   "id": "banheiro",
+   "label": "Banheiro",
+   "items": [
+    "banheiro"
+   ],
+   "box": [
+    0,
+    6.2,
+    2.4,
+    8.8
+   ],
+   "center": [
+    1.2,
+    1.2,
+    7.5
+   ]
+  },
+  {
+   "id": "dispensa",
+   "label": "Dispensa",
+   "items": [
+    "banheiro"
+   ],
+   "box": [
+    0,
+    8.8,
+    2.4,
+    10.600000000000001
+   ],
+   "center": [
+    1.2,
+    1.2,
+    9.700000000000001
+   ]
+  },
+  {
+   "id": "garagem",
+   "label": "Garagem",
+   "items": [
+    "garagem"
+   ],
+   "box": [
+    0,
+    10.6,
+    3,
+    16
+   ],
+   "center": [
+    1.5,
+    1.2,
+    13.3
+   ]
+  }
+ ],
+ "cam": {
+  "position": [
+   8.940714901995781,
+   21.784728189290448,
+   26.401235034359388
+  ],
+  "target": [
+   6.7,
+   0,
+   8.6
+  ],
+  "fov": 42,
+  "aspect": 1,
+  "near": 0.1,
+  "far": 200
+ },
+ "info": {
+  "nAgua": 1,
+  "nHalo": 7,
+  "nInst": 54
+ }
+}
