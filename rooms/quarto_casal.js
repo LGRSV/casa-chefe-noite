@@ -2,7 +2,7 @@ function roomQuartoCasal(ctx) {
   // QUARTO CASAL — x 0–3,6 · z 0–4,2. Faces internas: x 0,075/3,525 · z 0,075/4,125.
   // Janela fundo (z=0) x 1,2–2,4 · porta (z=4,2) x 1,0–1,9 (abre p/ dentro, dobradiça em x=1,0) · janela frente x 2,5–3,3.
   // Layout: cama centrada na janela do fundo, criados dos dois lados, banco ao pé, guarda-roupa na parede
-  // esquerda (x=0), cômoda + espelho na parede direita (x=3,6), planta no canto da janela da frente.
+  // esquerda (x=0), cômoda + espelho na parede direita (x=3,6).
   const { THREE, M, box, cyl, sph, place, add, std, rnd } = ctx;
   const G = () => new THREE.Group();
   const put = (m, x, y, z, rx = 0, ry = 0, rz = 0) => { m.position.set(x, y, z); m.rotation.set(rx, ry, rz); return m; };
@@ -152,19 +152,7 @@ function roomQuartoCasal(ctx) {
     }
     return g;
   };
-  const plant = () => {                    // pacová em vaso cerâmico claro: folhas = esferas achatadas
-    const g = G();
-    g.add(cyl(0.14, 0.11, 0.30, potMat, 0, 0.15, 0, 16));
-    g.add(cyl(0.125, 0.125, 0.02, M.soil, 0, 0.30, 0, 14));
-    g.add(cyl(0.012, 0.018, 0.75, M.trunk, 0, 0.675, 0, 8));
-    for (let i = 0; i < 6; i++) {
-      const a = (i / 6) * Math.PI * 2 + rnd() * 0.5, r = 0.08 + rnd() * 0.02;
-      const leaf = sph(0.14, i % 2 ? M.plant : M.leaf2, Math.cos(a) * r, 0.74 + i * 0.09 + rnd() * 0.04, Math.sin(a) * r);
-      leaf.scale.set(1, 0.16, 0.6); leaf.rotation.set(0, -a, 0.25 + rnd() * 0.3);
-      g.add(leaf);
-    }
-    return g;
-  };
+  // 22/11: removido a pedido do João (pacová em vaso)
   const rug = () => {                      // tapete grande: borda vinho escura, campo greige, 2 listras terracota por lado
     const g = G();
     g.add(box(2.0, 0.010, 2.2, vinhoDk, 0, 0.005, 0, { cast: false }));
@@ -213,7 +201,7 @@ function roomQuartoCasal(ctx) {
   add(box(0.04, 0.13, 0.04, amber, 3.33, 0.93, 2.73));
   add(put(box(0.012, 0.15, 0.12, walnutDk, 0, 0, 0), 3.30, 0.925, 3.15, 0, 0, -0.12)); // porta-retrato inclinado
   add(cyl(0.035, 0.035, 0.06, linenLt, 3.25, 0.88, 3.32, 12));            // vela
-  place(plant(), 3.20, 3.74);                                              // canto junto à janela da frente
+  // 22/11: removido a pedido do João (planta no canto da janela da frente)
 
   // ---------------- janela do fundo: persiana rolô (meio aberta) + cortinas de linho ----------------
   const roller = cyl(0.03, 0.03, 1.18, linenLt, 1.8, 2.21, 0.115, 12); roller.rotation.z = Math.PI / 2; add(roller);

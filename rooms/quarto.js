@@ -4,7 +4,7 @@
 // Layout: escrivaninha no fundo sob a janela (luminária de mesa do cartão em 4,15/0,5 fica livre),
 // cadeira gamer, estante na parede x=3,6, guarda-roupa e rack sob a TV na parede x=6,8,
 // cama de solteiro ao longo da parede direita com a cabeceira sob a janela da frente
-// (fora do giro da porta x 4,1–5,0), criado ao lado, tapete no meio, planta e violão no canto esquerdo.
+// (fora do giro da porta x 4,1–5,0), criado ao lado, tapete no meio, violão no canto esquerdo.
 function roomQuarto(ctx) {
   const { THREE, box, cyl, sph, place, add, std, rnd, M } = ctx;
   const G = () => new THREE.Group();
@@ -134,7 +134,7 @@ function roomQuarto(ctx) {
     books(0.05, 0.02, 0.62, 4);
     books(0.52, -0.62, 0.62, 8);
     const xe = books(0.99, -0.62, 0.05, 5);
-    g.add(cyl(0.05, 0.04, 0.09, ceramic, xe + 0.12, 1.0475, 0, 10)); g.add(sph(0.08, M.leaf2, xe + 0.12, 1.15, 0)); // vasinho
+    // 22/11: removido a pedido do João (vasinho com planta na estante)
     g.add(box(0.13, 0.16, 0.012, woodM, 0.45, 1.0825, -0.02));                        // porta-retrato
     const xt = books(1.46, -0.62, -0.2, 3);
     g.add(box(0.28, 0.05, 0.2, M.book[1], xt + 0.16, 1.4975, 0));                     // pilha deitada
@@ -212,17 +212,9 @@ function roomQuarto(ctx) {
   add(box(1.3, 0.012, 1.0, rugMat, 4.95, 0.006, 2.55, { cast: false }));
   for (const s of [-1, 1]) add(box(1.3, 0.004, 0.03, sage, 4.95, 0.014, 2.55 + s * 0.4, { cast: false }));
 
-  // ---- planta de chão no canto esquerdo, ao lado da porta -------------------
-  add(cyl(0.12, 0.09, 0.28, ceramic, 3.895, 0.14, 3.8, 14));
-  add(cyl(0.11, 0.11, 0.02, M.soil, 3.895, 0.285, 3.8, 12));
-  add(cyl(0.012, 0.018, 0.5, M.trunk, 3.895, 0.53, 3.8, 6));
-  for (let i = 0; i < 4; i++) {
-    const a = 0.8 + i * 1.57;
-    const leaf = sph(0.13, i % 2 ? M.plant : M.leaf2, 3.895 + Math.cos(a) * 0.05, 0.72 + i * 0.05, 3.8 + Math.sin(a) * 0.05);
-    leaf.scale.set(1.15, 0.45, 1); leaf.rotation.y = -a; add(leaf);
-  }
+  // 22/11: removido a pedido do João (planta de chão no canto esquerdo)
 
-  // ---- violão encostado na parede esquerda, entre a estante e a planta ------
+  // ---- violão encostado na parede esquerda, entre a estante e o canto ------
   {
     const g = G();
     const b1 = cyl(0.19, 0.19, 0.09, spruce, 0, 0.19, 0, 24); b1.rotation.z = Math.PI / 2; g.add(b1);   // bojo inferior

@@ -167,7 +167,7 @@ function roomVarandaPiscina(ctx) {
       for (const dx of [-0.55, 0.55]) add(box(0.03, 0.43, 0.24, blk, tx + dx, 0.215, bz));
     }
     add(cyl(0.16, 0.1, 0.09, M.white, tx, 0.825, tz, 16));                            // fruteira
-    add(sph(0.05, M.red, tx - 0.05, 0.9, tz - 0.03)); add(sph(0.05, M.leaf2, tx + 0.06, 0.9, tz + 0.03));
+    add(sph(0.05, M.red, tx - 0.05, 0.9, tz - 0.03)); add(sph(0.05, M.tan, tx + 0.06, 0.9, tz + 0.03));
     add(cyl(0.012, 0.035, 0.32, green, tx - 0.37, 0.94, tz - 0.16, 10));              // garrafa
     add(cyl(0.032, 0.026, 0.11, M.glass, tx + 0.33, 0.835, tz - 0.16, 10));
     add(cyl(0.032, 0.026, 0.11, M.glass, tx + 0.38, 0.835, tz + 0.17, 10));

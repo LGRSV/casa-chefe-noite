@@ -68,9 +68,9 @@ export const ITEMS = [
     fixtures: [{ p: [5.2, 2.55, 2.1], i: 30, d: 6.5, shadow: true }] },
   { key: 'led_quarto', label: 'LED Quarto', short: 'LED', kind: 'light', icon: 'led', rgb: true, color: 0xffb070,
     fixtures: [{ p: [4.15, 1.0, 0.5], i: 7, d: 4.5, lamp: true }] },
-  { key: 'sala', label: 'Sala / Cozinha', short: 'Luz', kind: 'light', icon: 'bulb', color: 0xfff1dc,
+  { key: 'sala', label: 'Sala', short: 'Luz', kind: 'light', icon: 'bulb', color: 0xfff1dc,
     fixtures: [{ p: [8.45, 2.55, 2.1], i: 42, d: 7.5, shadow: true }] },
-  { key: 'balcao', label: 'Balcão', short: 'Luz', kind: 'light', icon: 'bulb', color: 0xfff5e4,
+  { key: 'balcao', label: 'Cozinha', short: 'Luz', kind: 'light', icon: 'bulb', color: 0xfff5e4,
     fixtures: [{ p: [11.4, 2.55, 1.7], i: 20, d: 4.5 }] },
   { key: 'externa', label: 'Externa', short: 'Luz externa', kind: 'light', icon: 'bulb', color: 0xffe7c2,
     fixtures: [
@@ -232,8 +232,8 @@ const T = 0.15;     // espessura das paredes
 const ZONES = {
   quarto_casal: { x: 0,    z: 0,    w: 3.6,  d: 4.2, color: 0xb18b5f, label: 'Quarto Casal', lp: [1.8, 2.9] },
   quarto:       { x: 3.6,  z: 0,    w: 3.2,  d: 4.2, color: 0xb18b5f, label: 'Quarto',        lp: [5.2, 1.2], item: 'quarto' },
-  sala:         { x: 6.8,  z: 0,    w: 3.5,  d: 4.2, color: 0xd8d3c6, label: 'Sala / Cozinha', lp: [8.5, 2.9], item: 'sala' },
-  balcao:       { x: 10.3, z: 0,    w: 2.2,  d: 4.2, color: 0xd8d3c6, label: 'Balcão',        lp: [11.4, 1.2], item: 'balcao' },
+  sala:         { x: 6.8,  z: 0,    w: 3.5,  d: 4.2, color: 0xd8d3c6, label: 'Sala', lp: [8.5, 2.9], item: 'sala' },
+  balcao:       { x: 10.3, z: 0,    w: 2.2,  d: 4.2, color: 0xd8d3c6, label: 'Cozinha',        lp: [11.4, 1.2], item: 'balcao' },
   varanda:      { x: 0,    z: 4.2,  w: 12.5, d: 2.0, color: 0xc6bda8, label: 'Varanda',       lp: [6.25, 5.2], item: 'externa' },
   banheiro:     { x: 0,    z: 6.2,  w: 2.4,  d: 2.6, color: 0xcfd7da, label: 'Banheiro',      lp: [1.2, 7.5], item: 'banheiro' },
   dispensa:     { x: 0,    z: 8.8,  w: 2.4,  d: 1.8, color: 0xcbc4b6, label: 'Dispensa',      lp: [1.2, 9.7], item: 'banheiro' },
@@ -254,8 +254,8 @@ const PLACES = [
   { id: 'casa', label: 'Casa', rooms: [
     { id: 'quarto_casal', label: 'Quarto Casal', rects: [zr('quarto_casal')] },
     { id: 'quarto', label: 'Quarto', rects: [zr('quarto')] },
-    { id: 'sala', label: 'Sala / Cozinha', rects: [zr('sala')] },
-    { id: 'balcao', label: 'Balcão', rects: [zr('balcao')] },
+    { id: 'sala', label: 'Sala', rects: [zr('sala')] },
+    { id: 'balcao', label: 'Cozinha', rects: [zr('balcao')] },
     { id: 'varanda', label: 'Varanda', rects: [zr('varanda')] }] },
   { id: 'fundos', label: 'Área externa', rooms: [
     { id: 'piscina', label: 'Piscina', rects: [[DECK.x, DECK.z, DECK.w, DECK.d]] },
@@ -855,20 +855,7 @@ function furniture(M) {
       g.add(box(0.4, 0.13, 0.02, M.white, 0, 0.6, 1.82)); g.add(box(0.4, 0.13, 0.02, M.white, 0, 0.56, -1.82));
       return g;
     },
-    plant(size = 1, seed = 1) {
-      const g = G(); const rnd = mulberry32(seed);
-      g.add(cyl(0.2, 0.15, 0.32, M.pot, 0, 0.16, 0, 12)); g.add(cyl(0.18, 0.18, 0.02, M.soil, 0, 0.32, 0, 12));
-      g.add(cyl(0.03, 0.045, 0.5, M.trunk, 0, 0.56, 0, 8));
-      for (let i = 0; i < 6; i++) { const a = rnd() * Math.PI * 2, r = 0.1 + rnd() * 0.16; g.add(sph(0.2 + rnd() * 0.1, i % 2 ? M.plant : M.leaf2, Math.cos(a) * r, 0.9 + rnd() * 0.25, Math.sin(a) * r)); }
-      g.scale.setScalar(size); return g;
-    },
-    tree() {
-      const g = G();
-      g.add(cyl(0.09, 0.13, 2.0, M.trunk, 0, 1.0, 0, 10));
-      const rnd = mulberry32(8);
-      for (let i = 0; i < 7; i++) { const a = rnd() * Math.PI * 2, r = 0.15 + rnd() * 0.4; g.add(sph(0.5 + rnd() * 0.25, i % 2 ? M.plant : M.leaf2, Math.cos(a) * r, 2.2 + rnd() * 0.5, Math.sin(a) * r)); }
-      return g;
-    },
+    // 22/11: removido a pedido do João (F.plant e F.tree)
     ladder() {
       const g = G();
       for (const x of [-0.2, 0.2]) {
@@ -1253,7 +1240,7 @@ function roomQuartoCasal(ctx) {
   // QUARTO CASAL — x 0–3,6 · z 0–4,2. Faces internas: x 0,075/3,525 · z 0,075/4,125.
   // Janela fundo (z=0) x 1,2–2,4 · porta (z=4,2) x 1,0–1,9 (abre p/ dentro, dobradiça em x=1,0) · janela frente x 2,5–3,3.
   // Layout: cama centrada na janela do fundo, criados dos dois lados, banco ao pé, guarda-roupa na parede
-  // esquerda (x=0), cômoda + espelho na parede direita (x=3,6), planta no canto da janela da frente.
+  // esquerda (x=0), cômoda + espelho na parede direita (x=3,6).
   const { THREE, M, box, cyl, sph, place, add, std, rnd } = ctx;
   const G = () => new THREE.Group();
   const put = (m, x, y, z, rx = 0, ry = 0, rz = 0) => { m.position.set(x, y, z); m.rotation.set(rx, ry, rz); return m; };
@@ -1403,19 +1390,7 @@ function roomQuartoCasal(ctx) {
     }
     return g;
   };
-  const plant = () => {                    // pacová em vaso cerâmico claro: folhas = esferas achatadas
-    const g = G();
-    g.add(cyl(0.14, 0.11, 0.30, potMat, 0, 0.15, 0, 16));
-    g.add(cyl(0.125, 0.125, 0.02, M.soil, 0, 0.30, 0, 14));
-    g.add(cyl(0.012, 0.018, 0.75, M.trunk, 0, 0.675, 0, 8));
-    for (let i = 0; i < 6; i++) {
-      const a = (i / 6) * Math.PI * 2 + rnd() * 0.5, r = 0.08 + rnd() * 0.02;
-      const leaf = sph(0.14, i % 2 ? M.plant : M.leaf2, Math.cos(a) * r, 0.74 + i * 0.09 + rnd() * 0.04, Math.sin(a) * r);
-      leaf.scale.set(1, 0.16, 0.6); leaf.rotation.set(0, -a, 0.25 + rnd() * 0.3);
-      g.add(leaf);
-    }
-    return g;
-  };
+  // 22/11: removido a pedido do João (pacová em vaso)
   const rug = () => {                      // tapete grande: borda vinho escura, campo greige, 2 listras terracota por lado
     const g = G();
     g.add(box(2.0, 0.010, 2.2, vinhoDk, 0, 0.005, 0, { cast: false }));
@@ -1464,7 +1439,7 @@ function roomQuartoCasal(ctx) {
   add(box(0.04, 0.13, 0.04, amber, 3.33, 0.93, 2.73));
   add(put(box(0.012, 0.15, 0.12, walnutDk, 0, 0, 0), 3.30, 0.925, 3.15, 0, 0, -0.12)); // porta-retrato inclinado
   add(cyl(0.035, 0.035, 0.06, linenLt, 3.25, 0.88, 3.32, 12));            // vela
-  place(plant(), 3.20, 3.74);                                              // canto junto à janela da frente
+  // 22/11: removido a pedido do João (planta no canto da janela da frente)
 
   // ---------------- janela do fundo: persiana rolô (meio aberta) + cortinas de linho ----------------
   const roller = cyl(0.03, 0.03, 1.18, linenLt, 1.8, 2.21, 0.115, 12); roller.rotation.z = Math.PI / 2; add(roller);
@@ -1500,7 +1475,7 @@ function roomQuartoCasal(ctx) {
 // Layout: escrivaninha no fundo sob a janela (luminária de mesa do cartão em 4,15/0,5 fica livre),
 // cadeira gamer, estante na parede x=3,6, guarda-roupa e rack sob a TV na parede x=6,8,
 // cama de solteiro ao longo da parede direita com a cabeceira sob a janela da frente
-// (fora do giro da porta x 4,1–5,0), criado ao lado, tapete no meio, planta e violão no canto esquerdo.
+// (fora do giro da porta x 4,1–5,0), criado ao lado, tapete no meio, violão no canto esquerdo.
 function roomQuarto(ctx) {
   const { THREE, box, cyl, sph, place, add, std, rnd, M } = ctx;
   const G = () => new THREE.Group();
@@ -1630,7 +1605,7 @@ function roomQuarto(ctx) {
     books(0.05, 0.02, 0.62, 4);
     books(0.52, -0.62, 0.62, 8);
     const xe = books(0.99, -0.62, 0.05, 5);
-    g.add(cyl(0.05, 0.04, 0.09, ceramic, xe + 0.12, 1.0475, 0, 10)); g.add(sph(0.08, M.leaf2, xe + 0.12, 1.15, 0)); // vasinho
+    // 22/11: removido a pedido do João (vasinho com planta na estante)
     g.add(box(0.13, 0.16, 0.012, woodM, 0.45, 1.0825, -0.02));                        // porta-retrato
     const xt = books(1.46, -0.62, -0.2, 3);
     g.add(box(0.28, 0.05, 0.2, M.book[1], xt + 0.16, 1.4975, 0));                     // pilha deitada
@@ -1708,17 +1683,9 @@ function roomQuarto(ctx) {
   add(box(1.3, 0.012, 1.0, rugMat, 4.95, 0.006, 2.55, { cast: false }));
   for (const s of [-1, 1]) add(box(1.3, 0.004, 0.03, sage, 4.95, 0.014, 2.55 + s * 0.4, { cast: false }));
 
-  // ---- planta de chão no canto esquerdo, ao lado da porta -------------------
-  add(cyl(0.12, 0.09, 0.28, ceramic, 3.895, 0.14, 3.8, 14));
-  add(cyl(0.11, 0.11, 0.02, M.soil, 3.895, 0.285, 3.8, 12));
-  add(cyl(0.012, 0.018, 0.5, M.trunk, 3.895, 0.53, 3.8, 6));
-  for (let i = 0; i < 4; i++) {
-    const a = 0.8 + i * 1.57;
-    const leaf = sph(0.13, i % 2 ? M.plant : M.leaf2, 3.895 + Math.cos(a) * 0.05, 0.72 + i * 0.05, 3.8 + Math.sin(a) * 0.05);
-    leaf.scale.set(1.15, 0.45, 1); leaf.rotation.y = -a; add(leaf);
-  }
+  // 22/11: removido a pedido do João (planta de chão no canto esquerdo)
 
-  // ---- violão encostado na parede esquerda, entre a estante e a planta ------
+  // ---- violão encostado na parede esquerda, entre a estante e o canto ------
   {
     const g = G();
     const b1 = cyl(0.19, 0.19, 0.09, spruce, 0, 0.19, 0, 24); b1.rotation.z = Math.PI / 2; g.add(b1);   // bojo inferior
@@ -1744,7 +1711,7 @@ function roomQuarto(ctx) {
 
 function roomSalaCozinha(ctx) {
   // ---------------------------------------------------------------------------
-  // SALA / COZINHA (x 6,8–10,3) + BALCÃO (x 10,3–12,5) · z 0–4,2
+  // SALA (x 6,8–10,3) + COZINHA (x 10,3–12,5), integradas (sem divisória) · z 0–4,2
   // Estilo minimalista (referência de vídeo): creme/linho, carvalho, nogueira, pedra clara, preto fosco,
   // verde-oliva/sálvia e terracota em detalhe. Layout e posições da casa real preservados.
   // Objetos do cartão (ar-condicionado, pendentes) NÃO são recriados.
@@ -1844,8 +1811,7 @@ function roomSalaCozinha(ctx) {
     const g = G();
     g.add(cyl(0.3, 0.3, 0.03, marble, 0, 0.36, 0, 32));
     g.add(cyl(0.16, 0.2, 0.34, oak, 0, 0.17, 0, 24));
-    g.add(cyl(0.025, 0.025, 0.12, ceramic, 0.1, 0.435, 0.05, 12));
-    g.add(sph(0.04, olive, 0.1, 0.52, 0.05));
+    // 22/11: removido a pedido do João (vasinho com ramo na mesa de centro)
     return g;
   };
   // Cadeira de jantar: carvalho claro, assento com almofada fina, pernas pretas finas (encosto em -z)
@@ -1871,7 +1837,7 @@ function roomSalaCozinha(ctx) {
     g.add(box(0.9, 0.004, 0.28, cream, 0, 0.002, 0, { cast: false }));
     g.add(cyl(0.12, 0.08, 0.05, ceramic, 0, 0.025, 0, 24));
     g.add(sph(0.04, fruit[1], -0.04, 0.065, 0.02)); g.add(sph(0.04, fruit[0], 0.045, 0.065, -0.03)); g.add(sph(0.036, fruit[2], 0.005, 0.098, 0));
-    g.add(cyl(0.022, 0.022, 0.2, ceramic, 0.36, 0.1, 0.02, 12)); g.add(rot(cyl(0.003, 0.003, 0.3, M.trunk, 0.36, 0.34, 0.02, 4), 0, 0, 0.1));
+    // 22/11: removido a pedido do João (vasinho com ramo no centro de mesa)
     return g;
   };
   // Banqueta alta: assento arredondado oliva, pernas pretas finas
@@ -1892,15 +1858,7 @@ function roomSalaCozinha(ctx) {
     g.add(box(0.014, 0.9, 0.022, black, -0.3, 0.78, 0.364));
     return g;
   };
-  // Planta alta em vaso grande de cerâmica creme (≈1,5 m), folhas amplas
-  const plantTall = () => {
-    const g = G();
-    g.add(cyl(0.18, 0.15, 0.4, ceramic, 0, 0.2, 0, 24));
-    g.add(cyl(0.17, 0.17, 0.02, M.soil, 0, 0.4, 0, 16));
-    g.add(cyl(0.022, 0.03, 0.85, M.trunk, 0, 0.82, 0, 8));
-    for (let i = 0; i < 7; i++) { const a = i * 1.5 + 0.4, r = 0.1 + (i % 2) * 0.1; const l = sph(0.2 + (i % 3) * 0.03, i % 2 ? M.leaf2 : M.plant, Math.cos(a) * r, 0.95 + i * 0.12, Math.sin(a) * r); l.scale.set(1, 0.75, 1); g.add(l); }
-    return g;
-  };
+  // 22/11: removido a pedido do João (planta alta em vaso)
   // Fogão: cooktop de vidro preto + forno inox embutido (frente em +z)
   const stove = () => {
     const g = G();
@@ -1925,9 +1883,7 @@ function roomSalaCozinha(ctx) {
   // Rack flutuante com TV fina e objetos; fita LED no nicho (AC do cartão fica mais alto, y 2,2–2,5)
   place(rack(), 7.76, 0.31);
   place(tv(), 7.76, 0.31, 0, 0.585);
-  put(cyl(0.05, 0.035, 0.24, ceramic, 7.13, 0.7, 0.31, 20));                                    // vaso de cerâmica
-  put(rot(cyl(0.004, 0.004, 0.4, M.trunk, 7.1, 0.98, 0.3, 5), 0.12, 0, 0.22));                  // ramos secos
-  put(rot(cyl(0.004, 0.004, 0.36, M.trunk, 7.16, 0.96, 0.33, 5), -0.1, 0, -0.18));
+  // 22/11: removido a pedido do João (vaso de cerâmica com ramos secos)
   put(box(0.2, 0.03, 0.15, cream, 8.36, 0.6, 0.31));                                             // livros
   put(rot(box(0.18, 0.03, 0.14, terra, 8.36, 0.63, 0.31), 0, 0.15, 0));
   put(cyl(0.05, 0.05, 0.02, black, 8.36, 0.655, 0.31, 20));                                      // tigela preta
@@ -1937,27 +1893,30 @@ function roomSalaCozinha(ctx) {
   put(rot(cyl(0.138, 0.138, 0.012, paper, 6.902, 1.95, 1.2, 28), 0, 0, Math.PI / 2));
   put(box(0.01, 0.1, 0.006, black, 6.911, 2.0, 1.2, { cast: false }));
   put(rot(box(0.01, 0.07, 0.006, black, 6.911, 1.969, 1.229, { cast: false }), 1.0, 0, 0));
-  // Geladeira no canto junto da meia-parede + coluna de nogueira acima + planta alta
+  // Geladeira no canto (sem divisória: cozinha aberta) + coluna de nogueira acima
   place(fridge(), 9.8, 0.45);
   put(box(0.78, 0.98, 0.7, walnut, 9.8, 2.3, 0.4));                                              // marcenaria sobre a geladeira (até o teto)
   put(box(0.7, 0.01, 0.01, led, 9.8, 1.808, 0.752, { cast: false }));
-  place(plantTall(), 9.0, 0.42);
+  // 22/11: removido a pedido do João (planta alta ao lado da geladeira)
   // Sofá baixo de linho virado para a TV
   place(sofa(), 7.68, 1.75, Math.PI);
   place(coffeeTable(), 7.68, 0.98);
   place(armchair(), 8.72, 1.3, -2.1);
   place(F.rug(1.9, 1.5, 0xd9cdb4), 7.68, 1.25);                                                  // tapete de lã creme
-  // Sala de jantar: tapete claro, mesa oval, 6 cadeiras, centro de mesa
-  place(F.rug(1.7, 1.5, 0xd5c8ad), 9.2, 2.98);
-  place(table(), 9.08, 3.0);
-  place(tableTop(), 9.08, 3.0, 0, 0.778);
-  for (const [cx, cz, ry] of [[8.1, 3.0, Math.PI / 2], [10.06, 3.0, -Math.PI / 2], [8.74, 2.28, 0], [9.42, 2.28, 0], [8.74, 3.72, Math.PI], [9.42, 3.72, Math.PI]]) {
+  // Sala de jantar: tapete claro, mesa oval, 4 cadeiras (lado do balcão livre para as banquetas), centro de mesa
+  place(F.rug(1.7, 1.5, 0xd5c8ad), 9.2, 3.1);
+  place(table(), 9.08, 3.12);
+  place(tableTop(), 9.08, 3.12, 0, 0.778);
+  for (const [cx, cz, ry] of [[8.1, 3.12, Math.PI / 2], [10.06, 3.12, -Math.PI / 2], [8.74, 3.84, Math.PI], [9.42, 3.84, Math.PI]]) {
     place(chair(), cx, cz, ry + (rnd() - 0.5) * 0.12);
   }
-  // Balcão americano: tampo de carvalho na meia-parede (lado da sala) com 2 banquetas
-  put(box(0.34, 0.035, 1.25, oak, 10.055, 1.0, 1.55));
-  for (const z of [1.05, 2.05]) put(rot(box(0.37, 0.02, 0.02, black, 10.055, 0.88, z), 0, 0, -0.552));   // mãos-francesas finas
-  place(stool(), 9.98, 1.24, rnd() * 0.5); place(stool(), 9.98, 1.86, rnd() * 0.5);
+  // BALCÃO de cozinha (península baixa) EM FRENTE À GELADEIRA, a ~0,8 m dela: base de nogueira, tampo de pedra clara com
+  // beiral para as banquetas (lado do jantar). Sem divisória em x=10,3: cozinha aberta, passagem livre dos dois lados.
+  put(box(1.3, 0.86, 0.5, walnut, 9.8, 0.45, 1.9));
+  put(box(1.3, 0.06, 0.44, black, 9.8, 0.03, 1.9, { cast: false }));
+  put(box(1.5, 0.035, 0.66, marble, 9.8, 0.9, 1.96));
+  put(box(1.24, 0.01, 0.01, led, 9.8, 0.1, 2.16, { cast: false }));
+  for (const x of [9.45, 10.15]) { const st = stool(); st.scale.set(1, 1.12, 1); place(st, x, 2.45, rnd() * 0.5); }
   // Cortina no vidro da varanda (x 9,6–12,2): trilho preto, voil e painéis de linho nas laterais
   put(rot(cyl(0.01, 0.01, 2.8, black, 10.9, 2.4, 4.0, 8), 0, 0, Math.PI / 2));
   put(box(2.5, 2.3, 0.01, sheer, 10.9, 1.19, 4.075, { cast: false, receive: false }));
@@ -1966,7 +1925,7 @@ function roomSalaCozinha(ctx) {
     put(box(0.18, 2.34, 0.09, drape, x0 + 0.3, 1.21, 4.015, { cast: false }));
   }
 
-  // ======================= BALCÃO / COZINHA (x 10,3–12,5) =======================
+  // ======================= COZINHA (x 10,3–12,5) =======================
   // Fogão no canto esquerdo do fundo (fora da janela x 11–12), coifa embutida em coluna de nogueira até o teto
   place(stove(), 10.73, 0.39);
   put(cyl(0.1, 0.09, 0.1, inox, 10.59, 0.94, 0.25, 20));                                         // panela com tampa
@@ -2025,18 +1984,19 @@ function roomSalaCozinha(ctx) {
   // Cesto de vime com frutas no canto da bancada
   put(cyl(0.14, 0.11, 0.09, wicker, 12.16, 0.935, 0.4, 16));
   put(sph(0.04, fruit[1], 12.12, 0.99, 0.37)); put(sph(0.04, fruit[0], 12.2, 0.99, 0.43)); put(sph(0.038, fruit[3], 12.15, 1.025, 0.44));
-  // Temperos em vasinhos de cerâmica creme em frente à janela (x 11–12)
-  for (const [x, mat] of [[11.2, M.plant], [11.5, M.leaf2], [11.8, M.plant]]) { put(cyl(0.045, 0.035, 0.09, ceramic, x, 0.935, 0.23, 14)); put(sph(0.062, mat, x, 1.03, 0.23)); }
+  // 22/11: removido a pedido do João (temperos em vasinhos na janela)
   // Tábua de corte, rolo de papel-toalha, lixeira inox, tapete de cozinha
   put(box(0.3, 0.015, 0.2, oak, 12.16, 0.8975, 2.85));
   put(cyl(0.055, 0.055, 0.24, paper, 12.3, 1.01, 3.1, 14));
   put(cyl(0.13, 0.12, 0.5, inox, 12.15, 0.25, 3.55, 20));
   put(cyl(0.135, 0.135, 0.03, black, 12.15, 0.515, 3.55, 20));
-  place(F.rug(0.55, 1.6, 0xb7b896), 11.42, 1.9);
-  // Prateleira flutuante de carvalho na meia-parede (lado da cozinha), com LED
-  put(box(0.16, 0.025, 0.6, oak, 10.455, 1.5, 1.3));
-  put(box(0.01, 0.01, 0.56, led, 10.4, 1.484, 1.3, { cast: false }));
-  for (const z of [1.1, 1.3, 1.5]) put(cyl(0.035, 0.035, 0.1, glassy, 10.46, 1.56, z, 10));
+  // Mesa de cozinha de madeira (0,8 x 0,8) no espaço livre do meio, 3 cadeiras, tapete; folga dos armários e do balcão
+  place(F.rug(1.3, 1.5, 0xb7b896), 11.1, 2.7);
+  put(box(0.84, 0.035, 0.84, oak, 11.1, 0.76, 2.7));
+  for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) put(box(0.05, 0.74, 0.05, black, 11.1 + sx * 0.37, 0.37, 2.7 + sz * 0.37));
+  put(box(0.5, 0.012, 0.18, cream, 11.1, 0.784, 2.7)); put(cyl(0.09, 0.07, 0.04, ceramic, 11.1, 0.805, 2.7, 20));
+  for (const [cx, cz, ry] of [[11.1, 2.17, 0], [11.1, 3.23, Math.PI], [10.5, 2.7, Math.PI / 2]]) place(chair(), cx, cz, ry);
+  // 22/11: removido a pedido do João (prateleira na antiga meia-parede x=10,3 — divisória não existe)
 }
 
 function roomVarandaPiscina(ctx) {
@@ -2208,7 +2168,7 @@ function roomVarandaPiscina(ctx) {
       for (const dx of [-0.55, 0.55]) add(box(0.03, 0.43, 0.24, blk, tx + dx, 0.215, bz));
     }
     add(cyl(0.16, 0.1, 0.09, M.white, tx, 0.825, tz, 16));                            // fruteira
-    add(sph(0.05, M.red, tx - 0.05, 0.9, tz - 0.03)); add(sph(0.05, M.leaf2, tx + 0.06, 0.9, tz + 0.03));
+    add(sph(0.05, M.red, tx - 0.05, 0.9, tz - 0.03)); add(sph(0.05, M.tan, tx + 0.06, 0.9, tz + 0.03));
     add(cyl(0.012, 0.035, 0.32, green, tx - 0.37, 0.94, tz - 0.16, 10));              // garrafa
     add(cyl(0.032, 0.026, 0.11, M.glass, tx + 0.33, 0.835, tz - 0.16, 10));
     add(cyl(0.032, 0.026, 0.11, M.glass, tx + 0.38, 0.835, tz + 0.17, 10));
@@ -2785,27 +2745,7 @@ function roomGaragemJardim(ctx) {
   add(box(0.25, 0.012, 5.1, P.gravel, 12.375, 0.018, 9.05, { cast: false }));
   // 22/11: roda de pedriscos da árvore removida junto com ela
 
-  // Árvore (tronco afunilado, 3 galhos, copa em três verdes; copa puxada para o lado do deck, longe da arandela)
-  const tree = () => {
-    const g = G();
-    g.add(cyl(0.1, 0.15, 2.1, M.trunk, 0, 1.05, 0, 10));
-    tube(g, [0, 1.85, 0], [-0.5, 2.5, 0.25], 0.05, M.trunk); tube(g, [0, 1.95, 0], [0.3, 2.55, -0.35], 0.045, M.trunk); tube(g, [0, 2.05, 0], [-0.15, 2.75, -0.4], 0.04, M.trunk);
-    const balls = [[-0.45, 2.6, 0.25, 0.6], [0.3, 2.65, -0.35, 0.55], [-0.15, 2.95, -0.35, 0.55], [0.35, 2.45, 0.3, 0.5], [-0.6, 2.3, -0.15, 0.48], [0.05, 3.2, 0.05, 0.5]];
-    balls.forEach(([x, y, z, r], i) => g.add(sph(r + j(0.03), [M.plant, M.leaf2, P.leafDk][i % 3], x + j(0.05), y, z + j(0.05))));
-    return g;
-  };
-  // 22/11: removida a pedido do João -> place(tree(), 12.3, 11.9);
-
-  // Palmeiras pequenas: tronco em anéis + folhas caídas em leque (abrem para o lado do jardim, não para o muro)
-  const palm = (h, n, len, w, segs) => {
-    const g = G(); const sh = h / segs;
-    for (let i = 0; i < segs; i++) g.add(cyl(0.06 - i * 0.008, 0.075 - i * 0.008, sh, i % 2 ? M.trunk : M.woodDark, 0, sh * (i + 0.5), 0, 8));
-    for (let i = 0; i < n; i++) { const a = Math.PI + (i - (n - 1) / 2) * (3.6 / (n - 1)); frond(g, 0, h, 0, len, w, a + j(0.08), 0.35 + rnd() * 0.4, i % 2 ? P.palm : M.leaf2); }
-    g.add(sph(0.07, P.leafLt, 0, h + 0.03, 0));
-    return g;
-  };
-  // 22/11: removida a pedido do João -> place(palm(1.45, 6, 1.0, 0.18, 2), 12.95, 7.3);
-  // 22/11: removida a pedido do João -> place(palm(0.95, 5, 0.75, 0.15, 1), 12.95, 10.0);
+  // 22/11: removido a pedido do João (árvore e palmeiras)
 
   // 22/11: removido a pedido do João (arbustos shrub e touceiras com flores)
 
@@ -3963,7 +3903,7 @@ export class Casa3DCard extends HTMLElement {
     wallZ(12.5, 0, 6.2);
     wallZ(3.6, 0, 4.2);
     wallZ(6.8, 0, 4.2);
-    wallZ(10.3, 0, 2.2);
+    // 22/11: removido a pedido do João (a divisória/meia-parede em x=10,3 não existe: cozinha aberta)
     wallX(4.2, 0, 12.5, [{ a: 1.0, b: 1.9, t: 'door' }, { a: 2.5, b: 3.3, t: 'window' }, { a: 4.1, b: 5.0, t: 'door' }, { a: 5.5, b: 6.4, t: 'window' }, { a: 7.4, b: 8.3, t: 'door' }, { a: 9.6, b: 12.2, t: 'glass' }]);
     // Varanda (parede externa com aberturas para a piscina)
     wallX(6.2, 0, 12.5, [{ a: 2.9, b: 3.8, t: 'door' }, { a: 4.6, b: 6.6, t: 'window' }, { a: 8.0, b: 12.0, t: 'glass' }]);
@@ -5268,7 +5208,7 @@ export class Casa3DCard extends HTMLElement {
   // textos curtos do painel (o cômodo no layout do vídeo)
   static get MAQ_TEXT() {
     return { quarto_casal: 'Suíte ao fundo da casa, com janela para o terreno e porta para a varanda.', quarto: 'Quarto com TV na parede, luz principal e fita de LED em tom quente.',
-      sala: 'Sala integrada à cozinha, com ar-condicionado e porta para a varanda.', balcao: 'Balcão da cozinha, com janela ao fundo e vidro de correr para a varanda.',
+      sala: 'Sala integrada à cozinha, com ar-condicionado e porta para a varanda.', balcao: 'Cozinha aberta para a sala, com janela ao fundo e vidro de correr para a varanda.',
       varanda: 'Varanda coberta, aberta para o deck e a piscina.', piscina: 'Deck de madeira em volta da piscina, com luz subaquática e bomba de filtragem.',
       jardim: 'Jardim lateral, com arandelas acesas no muro.', quintal: 'Pátio da frente, com portão para a rua.', banheiro: 'Banheiro com box de vidro e luz própria.',
       dispensa: 'Dispensa ao lado do banheiro.', garagem: 'Garagem com o carro e portão para a rua.' };
@@ -5689,8 +5629,8 @@ export class Casa3DCard extends HTMLElement {
     // varanda, as arandelas do muro/jardim e o pátio do quintal; Quarto Casal não tem aparelho
     const ROOMS = [
       ['Quarto', ['quarto', 'led_quarto', 'tv', 'presenca', 'lux']],
-      ['Sala / Cozinha', ['sala', 'ac']],
-      ['Balcão', ['balcao']],
+      ['Sala', ['sala', 'ac']],
+      ['Cozinha', ['balcao']],
       ['Varanda / Jardim', ['externa']],
       ['Banheiro / Dispensa', ['banheiro']],
       ['Garagem', ['garagem']],

@@ -14,14 +14,14 @@ peças prontas e `_buildFurniture()` para a colocação atual — que você vai 
 ## Planta
 - Quarto casal: x 0–3,6 · z 0–4,2. Janela na parede do fundo (z=0) x 1,2–2,4. Porta para a varanda (z=4,2) x 1,0–1,9; janela x 2,5–3,3.
 - Quarto/escritório: x 3,6–6,8 · z 0–4,2. Janela fundo x 4,4–5,6. Porta (z=4,2) x 4,1–5,0; janela x 5,5–6,4. TV na parede x=6,8 (z 1,6–2,6, y 1,1–1,8) — é um objeto do cartão, NÃO recrie.
-- Sala/cozinha: x 6,8–10,3 · z 0–4,2. Porta (z=4,2) x 7,4–8,3. Ar-condicionado em (7,6, 2,35, 0,2) — objeto do cartão, NÃO recrie. Meia-parede em x=10,3 (z 0–2,2) separa do balcão.
-- Balcão (cozinha): x 10,3–12,5 · z 0–4,2. Janela fundo x 11,0–12,0. Vidro para a varanda (z=4,2) x 9,6–12,2.
+- Sala/cozinha: x 6,8–10,3 · z 0–4,2. Porta (z=4,2) x 7,4–8,3. Ar-condicionado em (7,6, 2,35, 0,2) — objeto do cartão, NÃO recrie. SEM divisória em x=10,3 (22/11, a pedido do João): sala e cozinha são integradas. Rótulo na interface: 'Sala' (id sala). Balcão de cozinha (península com banquetas) fica em frente à geladeira (centro x 9,8 · z 1,9), geladeira em (9,8 · 0,45).
+- Cozinha (id interno 'balcao', rótulo 'Cozinha'; armários, pia, fogão, coifa e mesa de madeira com 3 cadeiras no meio, x 10,3–12,5 · z 0–4,2. Janela fundo x 11,0–12,0. Vidro para a varanda (z=4,2) x 9,6–12,2).
 - Varanda: x 0–12,5 · z 4,2–6,2 (coberta, aberta para a piscina por: porta x 2,9–3,8, janela x 4,6–6,6 e vidro x 8,0–12,0 na parede z=6,2).
 - Banheiro: x 0–2,4 · z 6,2–8,8. Porta na parede x=2,4, z 7,0–7,9.
 - Dispensa: x 0–2,4 · z 8,8–10,6. Porta na parede x=2,4, z 9,3–10,1.
 - Garagem: x 0–3,0 · z 10,6–16,0. Vão aberto para o quintal na parede x=3,0 (z 11,4–15,4). Portão na parede z=16 (x 0,3–2,7). O carro (VW up! branco) fica centrado em (1,5, 13,6) — NÃO recrie, deixe o espaço.
 - Deck da piscina: x 2,9–10,9 · z 7,2–12,4. Piscina: reta x 3,9–8,3 + meia-lua até x 9,9; z 8,2–11,4. A bomba (caixa em 11,35, 12,9) é objeto do cartão.
-- Jardim (grama): x 10,9–13,4 · z 6,2–12,4; muro em x=13,4 com duas arandelas (y 2,0) em z 8,4 e 11,4. Pátio (asfalto): x 2,4–13,4 · z 12,4–16,0. Muro frontal z=16,0 contínuo (22/11: portãozinho de pedestre x 5,6–6,6 fechado a pedido do João; sem caixa de correio). Removidos a pedido do João (22/11): guarda-sol, mesa redonda e todas as plantas externas (varanda, deck, pátio, jardim lateral); grama e caminho de pedras ficam.
+- Jardim (grama): x 10,9–13,4 · z 6,2–12,4; muro em x=13,4 com duas arandelas (y 2,0) em z 8,4 e 11,4. Pátio (asfalto): x 2,4–13,4 · z 12,4–16,0. Muro frontal z=16,0 contínuo (22/11: portãozinho de pedestre x 5,6–6,6 fechado a pedido do João; sem caixa de correio). Removidos a pedido do João (22/11): guarda-sol, mesa redonda e TODAS as plantas da casa inteira, dentro e fora (árvores, arbustos, palmeiras, vasos, folhagens, temperos, ramos; F.plant e F.tree saíram do motor); grama e caminho de pedras ficam.
 
 ## API disponível no `ctx` (não importe nada; não use globais)
 - `ctx.THREE` — namespace do Three.js r170 (Shape, ExtrudeGeometry, TorusGeometry, LatheGeometry, Group, Mesh, MeshStandardMaterial, Color…).

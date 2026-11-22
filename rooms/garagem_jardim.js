@@ -119,27 +119,7 @@ function roomGaragemJardim(ctx) {
   add(box(0.25, 0.012, 5.1, P.gravel, 12.375, 0.018, 9.05, { cast: false }));
   // 22/11: roda de pedriscos da árvore removida junto com ela
 
-  // Árvore (tronco afunilado, 3 galhos, copa em três verdes; copa puxada para o lado do deck, longe da arandela)
-  const tree = () => {
-    const g = G();
-    g.add(cyl(0.1, 0.15, 2.1, M.trunk, 0, 1.05, 0, 10));
-    tube(g, [0, 1.85, 0], [-0.5, 2.5, 0.25], 0.05, M.trunk); tube(g, [0, 1.95, 0], [0.3, 2.55, -0.35], 0.045, M.trunk); tube(g, [0, 2.05, 0], [-0.15, 2.75, -0.4], 0.04, M.trunk);
-    const balls = [[-0.45, 2.6, 0.25, 0.6], [0.3, 2.65, -0.35, 0.55], [-0.15, 2.95, -0.35, 0.55], [0.35, 2.45, 0.3, 0.5], [-0.6, 2.3, -0.15, 0.48], [0.05, 3.2, 0.05, 0.5]];
-    balls.forEach(([x, y, z, r], i) => g.add(sph(r + j(0.03), [M.plant, M.leaf2, P.leafDk][i % 3], x + j(0.05), y, z + j(0.05))));
-    return g;
-  };
-  // 22/11: removida a pedido do João -> place(tree(), 12.3, 11.9);
-
-  // Palmeiras pequenas: tronco em anéis + folhas caídas em leque (abrem para o lado do jardim, não para o muro)
-  const palm = (h, n, len, w, segs) => {
-    const g = G(); const sh = h / segs;
-    for (let i = 0; i < segs; i++) g.add(cyl(0.06 - i * 0.008, 0.075 - i * 0.008, sh, i % 2 ? M.trunk : M.woodDark, 0, sh * (i + 0.5), 0, 8));
-    for (let i = 0; i < n; i++) { const a = Math.PI + (i - (n - 1) / 2) * (3.6 / (n - 1)); frond(g, 0, h, 0, len, w, a + j(0.08), 0.35 + rnd() * 0.4, i % 2 ? P.palm : M.leaf2); }
-    g.add(sph(0.07, P.leafLt, 0, h + 0.03, 0));
-    return g;
-  };
-  // 22/11: removida a pedido do João -> place(palm(1.45, 6, 1.0, 0.18, 2), 12.95, 7.3);
-  // 22/11: removida a pedido do João -> place(palm(0.95, 5, 0.75, 0.15, 1), 12.95, 10.0);
+  // 22/11: removido a pedido do João (árvore e palmeiras)
 
   // 22/11: removido a pedido do João (arbustos shrub e touceiras com flores)
 

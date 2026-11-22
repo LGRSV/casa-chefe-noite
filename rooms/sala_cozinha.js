@@ -1,6 +1,6 @@
 function roomSalaCozinha(ctx) {
   // ---------------------------------------------------------------------------
-  // SALA / COZINHA (x 6,8–10,3) + BALCÃO (x 10,3–12,5) · z 0–4,2
+  // SALA (x 6,8–10,3) + COZINHA (x 10,3–12,5), integradas (sem divisória) · z 0–4,2
   // Estilo minimalista (referência de vídeo): creme/linho, carvalho, nogueira, pedra clara, preto fosco,
   // verde-oliva/sálvia e terracota em detalhe. Layout e posições da casa real preservados.
   // Objetos do cartão (ar-condicionado, pendentes) NÃO são recriados.
@@ -100,8 +100,7 @@ function roomSalaCozinha(ctx) {
     const g = G();
     g.add(cyl(0.3, 0.3, 0.03, marble, 0, 0.36, 0, 32));
     g.add(cyl(0.16, 0.2, 0.34, oak, 0, 0.17, 0, 24));
-    g.add(cyl(0.025, 0.025, 0.12, ceramic, 0.1, 0.435, 0.05, 12));
-    g.add(sph(0.04, olive, 0.1, 0.52, 0.05));
+    // 22/11: removido a pedido do João (vasinho com ramo na mesa de centro)
     return g;
   };
   // Cadeira de jantar: carvalho claro, assento com almofada fina, pernas pretas finas (encosto em -z)
@@ -127,7 +126,7 @@ function roomSalaCozinha(ctx) {
     g.add(box(0.9, 0.004, 0.28, cream, 0, 0.002, 0, { cast: false }));
     g.add(cyl(0.12, 0.08, 0.05, ceramic, 0, 0.025, 0, 24));
     g.add(sph(0.04, fruit[1], -0.04, 0.065, 0.02)); g.add(sph(0.04, fruit[0], 0.045, 0.065, -0.03)); g.add(sph(0.036, fruit[2], 0.005, 0.098, 0));
-    g.add(cyl(0.022, 0.022, 0.2, ceramic, 0.36, 0.1, 0.02, 12)); g.add(rot(cyl(0.003, 0.003, 0.3, M.trunk, 0.36, 0.34, 0.02, 4), 0, 0, 0.1));
+    // 22/11: removido a pedido do João (vasinho com ramo no centro de mesa)
     return g;
   };
   // Banqueta alta: assento arredondado oliva, pernas pretas finas
@@ -148,15 +147,7 @@ function roomSalaCozinha(ctx) {
     g.add(box(0.014, 0.9, 0.022, black, -0.3, 0.78, 0.364));
     return g;
   };
-  // Planta alta em vaso grande de cerâmica creme (≈1,5 m), folhas amplas
-  const plantTall = () => {
-    const g = G();
-    g.add(cyl(0.18, 0.15, 0.4, ceramic, 0, 0.2, 0, 24));
-    g.add(cyl(0.17, 0.17, 0.02, M.soil, 0, 0.4, 0, 16));
-    g.add(cyl(0.022, 0.03, 0.85, M.trunk, 0, 0.82, 0, 8));
-    for (let i = 0; i < 7; i++) { const a = i * 1.5 + 0.4, r = 0.1 + (i % 2) * 0.1; const l = sph(0.2 + (i % 3) * 0.03, i % 2 ? M.leaf2 : M.plant, Math.cos(a) * r, 0.95 + i * 0.12, Math.sin(a) * r); l.scale.set(1, 0.75, 1); g.add(l); }
-    return g;
-  };
+  // 22/11: removido a pedido do João (planta alta em vaso)
   // Fogão: cooktop de vidro preto + forno inox embutido (frente em +z)
   const stove = () => {
     const g = G();
@@ -181,9 +172,7 @@ function roomSalaCozinha(ctx) {
   // Rack flutuante com TV fina e objetos; fita LED no nicho (AC do cartão fica mais alto, y 2,2–2,5)
   place(rack(), 7.76, 0.31);
   place(tv(), 7.76, 0.31, 0, 0.585);
-  put(cyl(0.05, 0.035, 0.24, ceramic, 7.13, 0.7, 0.31, 20));                                    // vaso de cerâmica
-  put(rot(cyl(0.004, 0.004, 0.4, M.trunk, 7.1, 0.98, 0.3, 5), 0.12, 0, 0.22));                  // ramos secos
-  put(rot(cyl(0.004, 0.004, 0.36, M.trunk, 7.16, 0.96, 0.33, 5), -0.1, 0, -0.18));
+  // 22/11: removido a pedido do João (vaso de cerâmica com ramos secos)
   put(box(0.2, 0.03, 0.15, cream, 8.36, 0.6, 0.31));                                             // livros
   put(rot(box(0.18, 0.03, 0.14, terra, 8.36, 0.63, 0.31), 0, 0.15, 0));
   put(cyl(0.05, 0.05, 0.02, black, 8.36, 0.655, 0.31, 20));                                      // tigela preta
@@ -193,27 +182,30 @@ function roomSalaCozinha(ctx) {
   put(rot(cyl(0.138, 0.138, 0.012, paper, 6.902, 1.95, 1.2, 28), 0, 0, Math.PI / 2));
   put(box(0.01, 0.1, 0.006, black, 6.911, 2.0, 1.2, { cast: false }));
   put(rot(box(0.01, 0.07, 0.006, black, 6.911, 1.969, 1.229, { cast: false }), 1.0, 0, 0));
-  // Geladeira no canto junto da meia-parede + coluna de nogueira acima + planta alta
+  // Geladeira no canto (sem divisória: cozinha aberta) + coluna de nogueira acima
   place(fridge(), 9.8, 0.45);
   put(box(0.78, 0.98, 0.7, walnut, 9.8, 2.3, 0.4));                                              // marcenaria sobre a geladeira (até o teto)
   put(box(0.7, 0.01, 0.01, led, 9.8, 1.808, 0.752, { cast: false }));
-  place(plantTall(), 9.0, 0.42);
+  // 22/11: removido a pedido do João (planta alta ao lado da geladeira)
   // Sofá baixo de linho virado para a TV
   place(sofa(), 7.68, 1.75, Math.PI);
   place(coffeeTable(), 7.68, 0.98);
   place(armchair(), 8.72, 1.3, -2.1);
   place(F.rug(1.9, 1.5, 0xd9cdb4), 7.68, 1.25);                                                  // tapete de lã creme
-  // Sala de jantar: tapete claro, mesa oval, 6 cadeiras, centro de mesa
-  place(F.rug(1.7, 1.5, 0xd5c8ad), 9.2, 2.98);
-  place(table(), 9.08, 3.0);
-  place(tableTop(), 9.08, 3.0, 0, 0.778);
-  for (const [cx, cz, ry] of [[8.1, 3.0, Math.PI / 2], [10.06, 3.0, -Math.PI / 2], [8.74, 2.28, 0], [9.42, 2.28, 0], [8.74, 3.72, Math.PI], [9.42, 3.72, Math.PI]]) {
+  // Sala de jantar: tapete claro, mesa oval, 4 cadeiras (lado do balcão livre para as banquetas), centro de mesa
+  place(F.rug(1.7, 1.5, 0xd5c8ad), 9.2, 3.1);
+  place(table(), 9.08, 3.12);
+  place(tableTop(), 9.08, 3.12, 0, 0.778);
+  for (const [cx, cz, ry] of [[8.1, 3.12, Math.PI / 2], [10.06, 3.12, -Math.PI / 2], [8.74, 3.84, Math.PI], [9.42, 3.84, Math.PI]]) {
     place(chair(), cx, cz, ry + (rnd() - 0.5) * 0.12);
   }
-  // Balcão americano: tampo de carvalho na meia-parede (lado da sala) com 2 banquetas
-  put(box(0.34, 0.035, 1.25, oak, 10.055, 1.0, 1.55));
-  for (const z of [1.05, 2.05]) put(rot(box(0.37, 0.02, 0.02, black, 10.055, 0.88, z), 0, 0, -0.552));   // mãos-francesas finas
-  place(stool(), 9.98, 1.24, rnd() * 0.5); place(stool(), 9.98, 1.86, rnd() * 0.5);
+  // BALCÃO de cozinha (península baixa) EM FRENTE À GELADEIRA, a ~0,8 m dela: base de nogueira, tampo de pedra clara com
+  // beiral para as banquetas (lado do jantar). Sem divisória em x=10,3: cozinha aberta, passagem livre dos dois lados.
+  put(box(1.3, 0.86, 0.5, walnut, 9.8, 0.45, 1.9));
+  put(box(1.3, 0.06, 0.44, black, 9.8, 0.03, 1.9, { cast: false }));
+  put(box(1.5, 0.035, 0.66, marble, 9.8, 0.9, 1.96));
+  put(box(1.24, 0.01, 0.01, led, 9.8, 0.1, 2.16, { cast: false }));
+  for (const x of [9.45, 10.15]) { const st = stool(); st.scale.set(1, 1.12, 1); place(st, x, 2.45, rnd() * 0.5); }
   // Cortina no vidro da varanda (x 9,6–12,2): trilho preto, voil e painéis de linho nas laterais
   put(rot(cyl(0.01, 0.01, 2.8, black, 10.9, 2.4, 4.0, 8), 0, 0, Math.PI / 2));
   put(box(2.5, 2.3, 0.01, sheer, 10.9, 1.19, 4.075, { cast: false, receive: false }));
@@ -222,7 +214,7 @@ function roomSalaCozinha(ctx) {
     put(box(0.18, 2.34, 0.09, drape, x0 + 0.3, 1.21, 4.015, { cast: false }));
   }
 
-  // ======================= BALCÃO / COZINHA (x 10,3–12,5) =======================
+  // ======================= COZINHA (x 10,3–12,5) =======================
   // Fogão no canto esquerdo do fundo (fora da janela x 11–12), coifa embutida em coluna de nogueira até o teto
   place(stove(), 10.73, 0.39);
   put(cyl(0.1, 0.09, 0.1, inox, 10.59, 0.94, 0.25, 20));                                         // panela com tampa
@@ -281,16 +273,17 @@ function roomSalaCozinha(ctx) {
   // Cesto de vime com frutas no canto da bancada
   put(cyl(0.14, 0.11, 0.09, wicker, 12.16, 0.935, 0.4, 16));
   put(sph(0.04, fruit[1], 12.12, 0.99, 0.37)); put(sph(0.04, fruit[0], 12.2, 0.99, 0.43)); put(sph(0.038, fruit[3], 12.15, 1.025, 0.44));
-  // Temperos em vasinhos de cerâmica creme em frente à janela (x 11–12)
-  for (const [x, mat] of [[11.2, M.plant], [11.5, M.leaf2], [11.8, M.plant]]) { put(cyl(0.045, 0.035, 0.09, ceramic, x, 0.935, 0.23, 14)); put(sph(0.062, mat, x, 1.03, 0.23)); }
+  // 22/11: removido a pedido do João (temperos em vasinhos na janela)
   // Tábua de corte, rolo de papel-toalha, lixeira inox, tapete de cozinha
   put(box(0.3, 0.015, 0.2, oak, 12.16, 0.8975, 2.85));
   put(cyl(0.055, 0.055, 0.24, paper, 12.3, 1.01, 3.1, 14));
   put(cyl(0.13, 0.12, 0.5, inox, 12.15, 0.25, 3.55, 20));
   put(cyl(0.135, 0.135, 0.03, black, 12.15, 0.515, 3.55, 20));
-  place(F.rug(0.55, 1.6, 0xb7b896), 11.42, 1.9);
-  // Prateleira flutuante de carvalho na meia-parede (lado da cozinha), com LED
-  put(box(0.16, 0.025, 0.6, oak, 10.455, 1.5, 1.3));
-  put(box(0.01, 0.01, 0.56, led, 10.4, 1.484, 1.3, { cast: false }));
-  for (const z of [1.1, 1.3, 1.5]) put(cyl(0.035, 0.035, 0.1, glassy, 10.46, 1.56, z, 10));
+  // Mesa de cozinha de madeira (0,8 x 0,8) no espaço livre do meio, 3 cadeiras, tapete; folga dos armários e do balcão
+  place(F.rug(1.3, 1.5, 0xb7b896), 11.1, 2.7);
+  put(box(0.84, 0.035, 0.84, oak, 11.1, 0.76, 2.7));
+  for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) put(box(0.05, 0.74, 0.05, black, 11.1 + sx * 0.37, 0.37, 2.7 + sz * 0.37));
+  put(box(0.5, 0.012, 0.18, cream, 11.1, 0.784, 2.7)); put(cyl(0.09, 0.07, 0.04, ceramic, 11.1, 0.805, 2.7, 20));
+  for (const [cx, cz, ry] of [[11.1, 2.17, 0], [11.1, 3.23, Math.PI], [10.5, 2.7, Math.PI / 2]]) place(chair(), cx, cz, ry);
+  // 22/11: removido a pedido do João (prateleira na antiga meia-parede x=10,3 — divisória não existe)
 }
