@@ -21,7 +21,7 @@ peças prontas e `_buildFurniture()` para a colocação atual — que você vai 
 - Dispensa: x 0–2,4 · z 8,8–10,6. Porta na parede x=2,4, z 9,3–10,1.
 - Garagem: x 0–3,0 · z 10,6–16,0. Vão aberto para o quintal na parede x=3,0 (z 11,4–15,4). Portão na parede z=16 (x 0,3–2,7). O carro (VW up! branco) fica centrado em (1,5, 13,6) — NÃO recrie, deixe o espaço.
 - Deck da piscina: x 2,9–10,9 · z 7,2–12,4. Piscina: reta x 3,9–8,3 + meia-lua até x 9,9; z 8,2–11,4. A bomba (caixa em 11,35, 12,9) é objeto do cartão.
-- Jardim (grama): x 10,9–13,4 · z 6,2–12,4; muro em x=13,4 com duas arandelas (y 2,0) em z 8,4 e 11,4. Pátio (asfalto): x 2,4–13,4 · z 12,4–16,0. Muro frontal z=16,0 com portão x 5,6–6,6.
+- Jardim (grama): x 10,9–13,4 · z 6,2–12,4; muro em x=13,4 com duas arandelas (y 2,0) em z 8,4 e 11,4. Pátio (asfalto): x 2,4–13,4 · z 12,4–16,0. Muro frontal z=16,0 contínuo (22/11: portãozinho de pedestre x 5,6–6,6 fechado a pedido do João; sem caixa de correio). Removidos a pedido do João (22/11): guarda-sol, mesa redonda e todas as plantas externas (varanda, deck, pátio, jardim lateral); grama e caminho de pedras ficam.
 
 ## API disponível no `ctx` (não importe nada; não use globais)
 - `ctx.THREE` — namespace do Three.js r170 (Shape, ExtrudeGeometry, TorusGeometry, LatheGeometry, Group, Mesh, MeshStandardMaterial, Color…).

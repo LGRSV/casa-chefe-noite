@@ -245,15 +245,15 @@ for o in luzes.get('piscina', []):
     try: o.light_linking.receiver_collection = rec
     except Exception as e: print('LL falhou', e); o.data.energy *= 0.25
 # estudio: sol quente suave + area grande + ceu de preenchimento
-sol = bpy.data.lights.new('sol', 'SUN'); sol.energy = 0.45; sol.angle = math.radians(7); sol.color = (1.0, 0.68, 0.42)
+sol = bpy.data.lights.new('sol', 'SUN'); sol.energy = 0.7; sol.angle = math.radians(7); sol.color = (1.0, 0.68, 0.42)
 so = bpy.data.objects.new('sol', sol); sc.collection.objects.link(so); so.lightgroup = 'estudio'
 so.rotation_euler = Vector((-0.6, 1.1, 0.55)).to_track_quat('-Z', 'Y').to_euler()
 so.rotation_euler = (math.radians(52), 0, math.radians(-38))
-area = bpy.data.lights.new('area', 'AREA'); area.energy = 260; area.size = 14; area.color = (1.0, 0.82, 0.66)
+area = bpy.data.lights.new('area', 'AREA'); area.energy = 500; area.size = 14; area.color = (1.0, 0.82, 0.66)
 ao = bpy.data.objects.new('area', area); sc.collection.objects.link(ao); ao.lightgroup = 'estudio'
 ao.location = (6.5, -8, 20); ao.rotation_euler = (math.radians(10), 0, 0)
 w = bpy.data.worlds.new('mundo'); w.use_nodes = True
-bg = w.node_tree.nodes['Background']; bg.inputs['Color'].default_value = (0.55, 0.6, 0.72, 1); bg.inputs['Strength'].default_value = 0.02
+bg = w.node_tree.nodes['Background']; bg.inputs['Color'].default_value = (0.55, 0.6, 0.72, 1); bg.inputs['Strength'].default_value = 0.035
 w.lightgroup = 'estudio'; sc.world = w
 
 # sombra suave sob a laje: plano so visivel pela camera, preto com alfa em degrade (nao interfere na luz)
@@ -301,7 +301,7 @@ sc.cycles.transmission_bounces = 6; sc.cycles.transparent_max_bounces = 6; sc.cy
 sc.cycles.caustics_reflective = False; sc.cycles.caustics_refractive = False
 sc.cycles.sample_clamp_indirect = 8
 sc.render.threads_mode = 'AUTO'
-sc.view_settings.view_transform = 'AgX'; sc.view_settings.look = 'AgX - High Contrast'; sc.view_settings.exposure = -0.7
+sc.view_settings.view_transform = 'AgX'; sc.view_settings.look = 'AgX - High Contrast'; sc.view_settings.exposure = -0.5
 sc.render.film_transparent = True
 sc.render.image_settings.file_format = 'PNG'; sc.render.image_settings.color_mode = 'RGBA'; sc.render.image_settings.compression = 15
 

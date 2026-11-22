@@ -2050,7 +2050,7 @@ function roomVarandaPiscina(ctx) {
   //   (de x 0 até 10,7); rede no canto esquerdo (junto à parede externa cega x 0–2,9); sofá centrado na janela
   //   x 4,6–6,6; churrasqueira + cervejeira entre a porta da sala e o vidro do balcão; mesa de madeira com bancos
   //   no fundo direito (x > 10,7, sem passagem necessária). Deck: escadas nas posições originais, espreguiçadeiras na
-  //   faixa sul, mesa redonda + 4 cadeiras no canto NE, guarda-sol + cadeiras de piscina no canto SE, ducha e
+  //   faixa sul, cadeiras de piscina no canto SE (mesa redonda e guarda-sol removidos em 22/11), ducha e
   //   tochas na faixa oeste, boias na água.
   const { THREE, M, box, cyl, sph, place, add, std, rnd } = ctx;
   const G = () => new THREE.Group();
@@ -2099,19 +2099,7 @@ function roomVarandaPiscina(ctx) {
   // VARANDA
   // =====================================================================================
 
-  // ---- canto esquerdo (x 0–1): palmeira em vaso branco grande ----
-  {
-    const g = G();
-    g.add(cyl(0.27, 0.2, 0.55, ceramic, 0, 0.275, 0, 16));
-    g.add(cyl(0.24, 0.24, 0.02, M.soil, 0, 0.56, 0, 12));
-    g.add(cyl(0.035, 0.05, 0.5, M.trunk, 0, 0.8, 0, 8));
-    for (let i = 0; i < 5; i++) {
-      // frondes apontando para longe da porta do casal (evita o vão x 1,0–1,9)
-      const a = -1.2 + (i / 4) * 2.4 + (rnd() - 0.5) * 0.3, tilt = 0.55 + rnd() * 0.3, len = 0.85 + rnd() * 0.2;
-      g.add(leaf(i % 2 ? M.plant : M.leaf2, 0.13, len, 0, 1.05, 0, tilt, a));
-    }
-    place(g, 0.5, 4.66);
-  }
+  // 22/11: removido a pedido do João (palmeira em vaso do canto esquerdo)
 
   // ---- rede (hammock) armada entre gancho na parede x=0 e coluna de madeira, ao longo da parede externa ----
   {
@@ -2151,7 +2139,7 @@ function roomVarandaPiscina(ctx) {
 
   // ---- capacho na porta para o deck (x 2,9–3,8) + vaso entre a janela e a porta do quarto ----
   add(box(0.72, 0.015, 0.45, coir, 3.35, 0.02, 5.88, { cast: false }));
-  place(ctx.F.plant(0.9, 5), 3.66, 4.6);
+  // 22/11: removido a pedido do João (vaso junto à porta do quarto)
 
   // ---- sofá de fibra marinho com almofadas de linho, centrado na janela da varanda (x 4,6–6,6) ----
   {
@@ -2234,9 +2222,7 @@ function roomVarandaPiscina(ctx) {
     add(cyl(0.04, 0.04, 0.5, M.dark, x, 0.25, 6.7, 10));
     add(cyl(0.055, 0.055, 0.1, lampOn, x, 0.55, 6.7, 10));
   }
-  for (const [x, z] of [[4.6, 6.72], [7.5, 6.72], [2.68, 8.6]]) {      // arbustos baixos
-    const s = sph(0.26 + rnd() * 0.06, rnd() < 0.5 ? M.plant : M.leaf2, x, 0.2, z); s.scale.y = 0.75; add(s);
-  }
+  // 22/11: removido a pedido do João (arbustos baixos do deck)
 
   // =====================================================================================
   // DECK DA PISCINA
@@ -2273,17 +2259,9 @@ function roomVarandaPiscina(ctx) {
   add(put(cyl(0.06, 0.06, 0.28, navy, 0, 0, 0, 12), 6.03, 0.525, 12.0, 0, 0, Math.PI / 2));
   add(cyl(0.025, 0.025, 0.14, M.white, 6.14, 0.535, 12.15, 8));
 
-  // ---- canto SE: guarda-sol marinho/branco com mesinha no mastro, 2 caipirinhas, 2 cadeiras de piscina, cooler ----
+  // 22/11: removido a pedido do João (guarda-sol, mastro, mesinha e caipirinhas)
+  // ---- canto SE: 2 cadeiras de piscina e cooler ----
   {
-    const x = 10.05, z = 12.05;
-    add(cyl(0.3, 0.32, 0.05, stone, x, 0.025, z, 20));                               // base de pedra
-    add(cyl(0.03, 0.03, 2.4, teak, x, 1.2, z, 10));                                   // mastro de madeira
-    const c = new THREE.Mesh(new THREE.ConeGeometry(1.0, 0.34, 12, 1, true), canopy); c.position.set(x, 2.28, z); c.castShadow = true; add(c);
-    const c2 = new THREE.Mesh(new THREE.ConeGeometry(0.4, 0.14, 12, 1, true), canopyW); c2.position.set(x, 2.5, z); c2.castShadow = true; add(c2);
-    add(sph(0.03, teak, x, 2.6, z));
-    add(cyl(0.32, 0.32, 0.03, teak, x, 0.55, z, 20));                                 // mesinha no mastro
-    add(cyl(0.032, 0.032, 0.12, lime, x - 0.15, 0.625, z + 0.08, 10));
-    add(cyl(0.032, 0.032, 0.12, lime, x + 0.17, 0.625, z - 0.06, 10));
     const poolChair = () => {                                                           // cadeira de piscina (tela marinho, tubo branco)
       const g = G();
       g.add(put(box(0.5, 0.03, 0.5, navy, 0, 0, 0), 0, 0.3, 0, -0.2));
@@ -2299,20 +2277,7 @@ function roomVarandaPiscina(ctx) {
     add(box(0.5, 0.4, 0.36, navy, 8.65, 0.2, 12.15)); add(box(0.52, 0.06, 0.38, M.white, 8.65, 0.43, 12.15)); // cooler
   }
 
-  // ---- canto NE: mesa redonda de teca com 4 cadeiras de fibra (cubo) + lanterna ----
-  {
-    const tx = 9.95, tz = 7.75;
-    add(cyl(0.5, 0.5, 0.035, teak, tx, 0.74, tz, 32)); add(cyl(0.03, 0.03, 0.7, blk, tx, 0.36, tz, 10)); add(cyl(0.26, 0.28, 0.025, blk, tx, 0.013, tz, 24));
-    add(box(0.12, 0.18, 0.12, M.glass, tx, 0.85, tz, { cast: false })); add(box(0.13, 0.02, 0.13, M.dark, tx, 0.95, tz)); add(sph(0.035, lampOn, tx, 0.8, tz)); // lanterna com vela
-    const fibraChair = () => {
-      const g = G();
-      g.add(box(0.5, 0.38, 0.5, fibra, 0, 0.19, 0));
-      g.add(box(0.46, 0.08, 0.46, linen, 0, 0.42, 0.02));
-      g.add(box(0.5, 0.42, 0.08, fibra, 0, 0.59, -0.21));
-      return g;
-    };
-    for (const [cx, cz, ry] of [[tx, tz - 0.75, 0], [tx, tz + 0.75, Math.PI], [tx - 0.75, tz, Math.PI / 2], [tx + 0.75, tz, -Math.PI / 2]]) place(fibraChair(), cx, cz, ry);
-  }
+  // 22/11: removido a pedido do João (mesa redonda, 4 cadeiras e lanterna)
 
   // ---- faixa oeste: ducha de piscina (chuveirão) sobre estrado de madeira, vaso grande, tocha ----
   {
@@ -2323,16 +2288,7 @@ function roomVarandaPiscina(ctx) {
     add(cyl(0.1, 0.1, 0.02, M.chrome, x + 0.28, 2.13, z, 16));                        // crivo
     add(put(cyl(0.03, 0.03, 0.04, M.chrome, 0, 0, 0, 10), x + 0.05, 1.0, z, 0, 0, Math.PI / 2)); // registro
   }
-  const agavePot = (x, z) => {
-    add(cyl(0.25, 0.19, 0.5, ceramic, x, 0.25, z, 16)); add(cyl(0.22, 0.22, 0.02, M.soil, x, 0.5, z, 12));
-    for (let i = 0; i < 4; i++) add(leaf(agave, 0.07, 1.0 + rnd() * 0.2, x, 0.5, z, 0.3 + rnd() * 0.15, (i / 4) * Math.PI * 2 + rnd() * 0.5, 0.35, 4));
-  };
-  const spherePot = (x, z) => {
-    add(cyl(0.25, 0.19, 0.5, ceramic, x, 0.25, z, 16)); add(cyl(0.22, 0.22, 0.02, M.soil, x, 0.5, z, 12));
-    add(sph(0.32, M.plant, x, 0.8, z)); add(sph(0.24, M.leaf2, x + 0.12, 0.98, z - 0.1));
-  };
-  spherePot(3.28, 8.45);
-  agavePot(10.6, 10.9);
+  // 22/11: removido a pedido do João (vasos spherePot/agavePot)
   const torch = (x, z) => {
     add(cyl(0.028, 0.032, 1.5, bamboo, x, 0.75, z, 8));
     add(cyl(0.07, 0.045, 0.16, M.dark, x, 1.58, z, 10));
@@ -2368,14 +2324,7 @@ function roomVarandaPiscina(ctx) {
     for (const a of [-0.8, 0, 0.8]) glow(x1 + Math.cos(a) * (r - 0.3), zc + Math.sin(a) * (r - 0.3), 1.1);
   }
 
-  // ---- boias na água (superfície em y = -0,16) ----
-  {
-    const ring = new THREE.Mesh(new THREE.TorusGeometry(0.4, 0.13, 10, 24), navy);
-    ring.position.set(5.2, -0.14, 9.1); ring.rotation.x = Math.PI / 2; ring.castShadow = true; add(ring);
-    add(put(box(1.75, 0.12, 0.72, M.white, 0, 0, 0), 7.0, -0.12, 10.5, 0, 0.4));       // colchão inflável
-    add(put(box(0.7, 0.08, 0.26, navy, 0, 0, 0), 6.34, -0.09, 10.78, 0, 0.4));         // travesseiro do colchão
-    add(sph(0.15, M.white, 4.4, -0.06, 10.8));                                          // bola
-  }
+  // 22/11: boias, colchão inflável e bola removidos a pedido do João (piscina limpa como no vídeo)
 }
 
 function roomBanheiroDispensa(ctx) {
@@ -2831,16 +2780,10 @@ function roomGaragemJardim(ctx) {
   add(box(0.06, 0.32, 0.24, P.paintWhite, 0.105, 1.6, 15.55));
 
   // ============================ JARDIM (grama x 10,9–13,4 · z 6,2–12,4) ============================
-  // Canteiro ao longo do muro (x=13,4): terra + borda de pedra em segmentos irregulares
-  add(box(0.7, 0.05, 5.3, M.soil, 12.94, 0.03, 9.07, { cast: false }));
-  for (let i = 0; i < 4; i++) {
-    const h = 0.1 + rnd() * 0.05, s = box(0.14, h, 1.31, i % 2 ? P.stone2 : P.stone, 12.55 + j(0.01), h / 2, 7.07 + i * 1.335);
-    s.rotation.y = j(0.03); add(s);
-  }
-  for (const z of [6.4, 11.75]) add(box(0.77, 0.12, 0.14, P.stone, 12.935, 0.06, z));
-  // Pedriscos: faixa entre o caminho e o canteiro + roda em volta da árvore
+  // 22/11: removido a pedido do João (canteiro ao longo do muro: terra e borda de pedra)
+  // Pedriscos: faixa entre o caminho e o antigo canteiro
   add(box(0.25, 0.012, 5.1, P.gravel, 12.375, 0.018, 9.05, { cast: false }));
-  add(flat(cyl(0.5, 0.5, 0.014, P.gravel, 12.3, 0.02, 11.9, 20)));
+  // 22/11: roda de pedriscos da árvore removida junto com ela
 
   // Árvore (tronco afunilado, 3 galhos, copa em três verdes; copa puxada para o lado do deck, longe da arandela)
   const tree = () => {
@@ -2851,7 +2794,7 @@ function roomGaragemJardim(ctx) {
     balls.forEach(([x, y, z, r], i) => g.add(sph(r + j(0.03), [M.plant, M.leaf2, P.leafDk][i % 3], x + j(0.05), y, z + j(0.05))));
     return g;
   };
-  place(tree(), 12.3, 11.9);
+  // 22/11: removida a pedido do João -> place(tree(), 12.3, 11.9);
 
   // Palmeiras pequenas: tronco em anéis + folhas caídas em leque (abrem para o lado do jardim, não para o muro)
   const palm = (h, n, len, w, segs) => {
@@ -2861,29 +2804,12 @@ function roomGaragemJardim(ctx) {
     g.add(sph(0.07, P.leafLt, 0, h + 0.03, 0));
     return g;
   };
-  place(palm(1.45, 6, 1.0, 0.18, 2), 12.95, 7.3);
-  place(palm(0.95, 5, 0.75, 0.15, 1), 12.95, 10.0);
+  // 22/11: removida a pedido do João -> place(palm(1.45, 6, 1.0, 0.18, 2), 12.95, 7.3);
+  // 22/11: removida a pedido do João -> place(palm(0.95, 5, 0.75, 0.15, 1), 12.95, 10.0);
 
-  // Arbustos (3 esferas em verdes diferentes) e touceiras com flores discretas
-  const shrub = (x, z, s, m1, m2) => {
-    add(sph(0.32 * s, m1, x, 0.28 * s, z)); add(sph(0.25 * s, m2, x - 0.18 * s, 0.26 * s, z + 0.15 * s)); add(sph(0.22 * s, P.leafLt, x + 0.13 * s, 0.32 * s, z - 0.17 * s));
-  };
-  shrub(12.9, 6.78, 1.0, P.leafDk, M.leaf2); shrub(12.95, 8.9, 0.85, M.plant, P.silver); shrub(12.9, 11.25, 0.95, P.leafDk, M.plant);
-  const flowers = (x, z, bloom, r = 0.05, tall = 1) => {
-    add(sph(0.2, M.leaf2, x, 0.16, z));
-    for (let i = 0; i < 2; i++) { const a = rnd() * Math.PI * 2, d = 0.06 + rnd() * 0.1; const b = sph(r, bloom, x + Math.cos(a) * d, 0.3 + rnd() * 0.05, z + Math.sin(a) * d); b.scale.y = tall; add(b); }
-  };
-  flowers(13.0, 7.95, P.pink); flowers(12.95, 8.45, P.cream, 0.04); flowers(12.95, 10.65, P.lilac, 0.035, 2.4);
+  // 22/11: removido a pedido do João (arbustos shrub e touceiras com flores)
 
-  // Jardineira longa de carvalho com folhagem junto ao vidro da varanda + vasos grandes (creme e terracota)
-  add(box(1.3, 0.42, 0.4, P.oak, 11.3, 0.21, 6.7)); add(box(1.2, 0.02, 0.3, M.soil, 11.3, 0.43, 6.7, { cast: false }));
-  for (let i = 0; i < 5; i++) { const b = sph(0.17 + rnd() * 0.05, [P.leafDk, P.palm, P.leafLt][i % 3], 10.85 + i * 0.23, 0.58 + rnd() * 0.08, 6.7); b.scale.y = 1.15; add(b); }
-  const bigPot = (x, z, mat, h, plant) => {
-    add(cyl(0.3, 0.24, h, mat, x, h / 2, z, 20)); add(cyl(0.27, 0.27, 0.02, M.soil, x, h, z, 16));
-    const gp = G(); for (let i = 0; i < 6; i++) frond(gp, 0, h, 0, 0.7, 0.1, i * 1.047 + j(0.15), -1.1 + rnd() * 0.3, i % 2 ? P.leafLt : plant); place(gp, x, z);
-    add(sph(0.2, plant, x, h + 0.25, z));
-  };
-  bigPot(11.25, 8.4, P.ceramic, 0.62, P.palm); bigPot(11.2, 10.9, P.terra, 0.55, P.leafDk);
+  // 22/11: removido a pedido do João (jardineira longa com folhagem e bigPot)
 
   // Caminho de lajotas: pátio → jardim → varanda (desvia do tronco), e da varanda ao deck (porta e vidro)
   const stone = (x, z, i) => { const s = box(0.42, 0.03, 0.34, [P.stone, P.stone2, P.stoneDk][i % 3], x + j(0.04), 0.03, z, { cast: false }); s.rotation.y = j(0.12); add(s); };
@@ -2908,17 +2834,14 @@ function roomGaragemJardim(ctx) {
   add(box(0.1, 0.006, 2.5, P.paintWhite, 8.0, 0.018, 14.15, { cast: false }));
   add(box(0.15, 0.1, 0.55, P.yellow, 7.6, 0.05, 14.15));
 
-  // Caixa de correio na face interna do muro, ao lado do portão de pedestre (x 5,6–6,6)
-  add(box(0.3, 0.22, 0.14, M.white, 5.25, 1.35, 15.855)); add(box(0.22, 0.02, 0.012, M.dark, 5.25, 1.42, 15.78)); add(box(0.02, 0.1, 0.04, P.redTool, 5.42, 1.42, 15.84));
+  // 22/11: removido a pedido do João (caixa de correio do portão de pedestre; portãozinho fechado, muro contínuo)
 
-  // Lixeira com rodas, banco de pedra e vaso grande com buxinho junto ao portão
+  // Lixeira com rodas e banco de pedra
   add(box(0.5, 0.85, 0.55, P.binGreen, 4.6, 0.5, 15.6)); add(box(0.54, 0.06, 0.59, P.binGreenDk, 4.6, 0.955, 15.6));
   for (const sx of [-1, 1]) { const w = cyl(0.09, 0.09, 0.05, M.dark, 4.6 + sx * 0.27, 0.09, 15.82, 12); w.rotation.z = Math.PI / 2; add(w); }
   add(box(1.4, 0.07, 0.42, P.oak, 9.6, 0.445, 15.65)); for (const sx of [-1, 1]) add(box(0.14, 0.41, 0.36, P.stone, 9.6 + sx * 0.55, 0.205, 15.65));
-  add(cyl(0.3, 0.26, 0.65, P.ceramic, 7.1, 0.325, 15.6, 20)); add(cyl(0.27, 0.27, 0.02, M.soil, 7.1, 0.65, 15.6, 16));
-  add(sph(0.36, P.leafDk, 7.1, 1.0, 15.6)); add(sph(0.22, P.leafLt, 7.25, 1.17, 15.5));
-  add(box(1.5, 0.34, 0.34, P.oak, 11.6, 0.17, 15.65)); add(box(1.4, 0.02, 0.26, M.soil, 11.6, 0.35, 15.65, { cast: false }));   // jardineira de carvalho junto ao muro
-  for (let i = 0; i < 4; i++) add(sph(0.16 + rnd() * 0.04, [P.leafDk, P.palm, P.leafLt, P.silver][i], 11.15 + i * 0.32, 0.5, 15.65));
+  // 22/11: removido a pedido do João (vaso com buxinho junto ao portão)
+  // 22/11: removido a pedido do João (jardineira de carvalho junto ao muro e bolinhas de folhagem)
 
   // Tampa de bueiro redonda no meio do pátio e grelha de escoamento junto ao muro
   add(flat(cyl(0.3, 0.3, 0.02, P.iron, 10.3, 0.022, 14.6, 20))); add(flat(cyl(0.24, 0.24, 0.008, P.ironLt, 10.3, 0.036, 14.6, 20)));
@@ -4053,7 +3976,7 @@ export class Casa3DCard extends HTMLElement {
     wallX(16.0, 0, 3.0, [{ a: 0.3, b: 2.7, t: 'gate' }]);
     // Muros do lote
     wallZ(LOT.w, 0, LOT.d, [], 2.2, M.lowWall);
-    wallX(LOT.d, 3.0, LOT.w, [{ a: 5.6, b: 6.6, t: 'open' }], 1.8, M.lowWall);
+    wallX(LOT.d, 3.0, LOT.w, [], 1.8, M.lowWall);   // 22/11: portãozinho de pedestre (x 5,6–6,6) fechado a pedido do João: muro contínuo
     wallX(-0.05, -0.2, LOT.w, [], 2.2, M.lowWall);
   }
 

@@ -114,14 +114,8 @@ function roomGaragemJardim(ctx) {
   add(box(0.06, 0.32, 0.24, P.paintWhite, 0.105, 1.6, 15.55));
 
   // ============================ JARDIM (grama x 10,9–13,4 · z 6,2–12,4) ============================
-  // Canteiro ao longo do muro (x=13,4): terra + borda de pedra em segmentos irregulares
-  add(box(0.7, 0.05, 5.3, M.soil, 12.94, 0.03, 9.07, { cast: false }));
-  for (let i = 0; i < 4; i++) {
-    const h = 0.1 + rnd() * 0.05, s = box(0.14, h, 1.31, i % 2 ? P.stone2 : P.stone, 12.55 + j(0.01), h / 2, 7.07 + i * 1.335);
-    s.rotation.y = j(0.03); add(s);
-  }
-  for (const z of [6.4, 11.75]) add(box(0.77, 0.12, 0.14, P.stone, 12.935, 0.06, z));
-  // Pedriscos: faixa entre o caminho e o canteiro + roda em volta da árvore
+  // 22/11: removido a pedido do João (canteiro ao longo do muro: terra e borda de pedra)
+  // Pedriscos: faixa entre o caminho e o antigo canteiro
   add(box(0.25, 0.012, 5.1, P.gravel, 12.375, 0.018, 9.05, { cast: false }));
   // 22/11: roda de pedriscos da árvore removida junto com ela
 
@@ -147,26 +141,9 @@ function roomGaragemJardim(ctx) {
   // 22/11: removida a pedido do João -> place(palm(1.45, 6, 1.0, 0.18, 2), 12.95, 7.3);
   // 22/11: removida a pedido do João -> place(palm(0.95, 5, 0.75, 0.15, 1), 12.95, 10.0);
 
-  // Arbustos (3 esferas em verdes diferentes) e touceiras com flores discretas
-  const shrub = (x, z, s, m1, m2) => {
-    add(sph(0.32 * s, m1, x, 0.28 * s, z)); add(sph(0.25 * s, m2, x - 0.18 * s, 0.26 * s, z + 0.15 * s)); add(sph(0.22 * s, P.leafLt, x + 0.13 * s, 0.32 * s, z - 0.17 * s));
-  };
-  shrub(12.9, 6.78, 1.0, P.leafDk, M.leaf2); shrub(12.95, 8.9, 0.85, M.plant, P.silver); shrub(12.9, 11.25, 0.95, P.leafDk, M.plant);
-  const flowers = (x, z, bloom, r = 0.05, tall = 1) => {
-    add(sph(0.2, M.leaf2, x, 0.16, z));
-    for (let i = 0; i < 2; i++) { const a = rnd() * Math.PI * 2, d = 0.06 + rnd() * 0.1; const b = sph(r, bloom, x + Math.cos(a) * d, 0.3 + rnd() * 0.05, z + Math.sin(a) * d); b.scale.y = tall; add(b); }
-  };
-  flowers(13.0, 7.95, P.pink); flowers(12.95, 8.45, P.cream, 0.04); flowers(12.95, 10.65, P.lilac, 0.035, 2.4);
+  // 22/11: removido a pedido do João (arbustos shrub e touceiras com flores)
 
-  // Jardineira longa de carvalho com folhagem junto ao vidro da varanda + vasos grandes (creme e terracota)
-  add(box(1.3, 0.42, 0.4, P.oak, 11.3, 0.21, 6.7)); add(box(1.2, 0.02, 0.3, M.soil, 11.3, 0.43, 6.7, { cast: false }));
-  for (let i = 0; i < 5; i++) { const b = sph(0.17 + rnd() * 0.05, [P.leafDk, P.palm, P.leafLt][i % 3], 10.85 + i * 0.23, 0.58 + rnd() * 0.08, 6.7); b.scale.y = 1.15; add(b); }
-  const bigPot = (x, z, mat, h, plant) => {
-    add(cyl(0.3, 0.24, h, mat, x, h / 2, z, 20)); add(cyl(0.27, 0.27, 0.02, M.soil, x, h, z, 16));
-    const gp = G(); for (let i = 0; i < 6; i++) frond(gp, 0, h, 0, 0.7, 0.1, i * 1.047 + j(0.15), -1.1 + rnd() * 0.3, i % 2 ? P.leafLt : plant); place(gp, x, z);
-    add(sph(0.2, plant, x, h + 0.25, z));
-  };
-  bigPot(11.25, 8.4, P.ceramic, 0.62, P.palm); bigPot(11.2, 10.9, P.terra, 0.55, P.leafDk);
+  // 22/11: removido a pedido do João (jardineira longa com folhagem e bigPot)
 
   // Caminho de lajotas: pátio → jardim → varanda (desvia do tronco), e da varanda ao deck (porta e vidro)
   const stone = (x, z, i) => { const s = box(0.42, 0.03, 0.34, [P.stone, P.stone2, P.stoneDk][i % 3], x + j(0.04), 0.03, z, { cast: false }); s.rotation.y = j(0.12); add(s); };
@@ -191,17 +168,14 @@ function roomGaragemJardim(ctx) {
   add(box(0.1, 0.006, 2.5, P.paintWhite, 8.0, 0.018, 14.15, { cast: false }));
   add(box(0.15, 0.1, 0.55, P.yellow, 7.6, 0.05, 14.15));
 
-  // Caixa de correio na face interna do muro, ao lado do portão de pedestre (x 5,6–6,6)
-  add(box(0.3, 0.22, 0.14, M.white, 5.25, 1.35, 15.855)); add(box(0.22, 0.02, 0.012, M.dark, 5.25, 1.42, 15.78)); add(box(0.02, 0.1, 0.04, P.redTool, 5.42, 1.42, 15.84));
+  // 22/11: removido a pedido do João (caixa de correio do portão de pedestre; portãozinho fechado, muro contínuo)
 
-  // Lixeira com rodas, banco de pedra e vaso grande com buxinho junto ao portão
+  // Lixeira com rodas e banco de pedra
   add(box(0.5, 0.85, 0.55, P.binGreen, 4.6, 0.5, 15.6)); add(box(0.54, 0.06, 0.59, P.binGreenDk, 4.6, 0.955, 15.6));
   for (const sx of [-1, 1]) { const w = cyl(0.09, 0.09, 0.05, M.dark, 4.6 + sx * 0.27, 0.09, 15.82, 12); w.rotation.z = Math.PI / 2; add(w); }
   add(box(1.4, 0.07, 0.42, P.oak, 9.6, 0.445, 15.65)); for (const sx of [-1, 1]) add(box(0.14, 0.41, 0.36, P.stone, 9.6 + sx * 0.55, 0.205, 15.65));
-  add(cyl(0.3, 0.26, 0.65, P.ceramic, 7.1, 0.325, 15.6, 20)); add(cyl(0.27, 0.27, 0.02, M.soil, 7.1, 0.65, 15.6, 16));
-  add(sph(0.36, P.leafDk, 7.1, 1.0, 15.6)); add(sph(0.22, P.leafLt, 7.25, 1.17, 15.5));
-  add(box(1.5, 0.34, 0.34, P.oak, 11.6, 0.17, 15.65)); add(box(1.4, 0.02, 0.26, M.soil, 11.6, 0.35, 15.65, { cast: false }));   // jardineira de carvalho junto ao muro
-  for (let i = 0; i < 4; i++) add(sph(0.16 + rnd() * 0.04, [P.leafDk, P.palm, P.leafLt, P.silver][i], 11.15 + i * 0.32, 0.5, 15.65));
+  // 22/11: removido a pedido do João (vaso com buxinho junto ao portão)
+  // 22/11: removido a pedido do João (jardineira de carvalho junto ao muro e bolinhas de folhagem)
 
   // Tampa de bueiro redonda no meio do pátio e grelha de escoamento junto ao muro
   add(flat(cyl(0.3, 0.3, 0.02, P.iron, 10.3, 0.022, 14.6, 20))); add(flat(cyl(0.24, 0.24, 0.008, P.ironLt, 10.3, 0.036, 14.6, 20)));

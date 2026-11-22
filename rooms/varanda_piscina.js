@@ -9,7 +9,7 @@ function roomVarandaPiscina(ctx) {
   //   (de x 0 até 10,7); rede no canto esquerdo (junto à parede externa cega x 0–2,9); sofá centrado na janela
   //   x 4,6–6,6; churrasqueira + cervejeira entre a porta da sala e o vidro do balcão; mesa de madeira com bancos
   //   no fundo direito (x > 10,7, sem passagem necessária). Deck: escadas nas posições originais, espreguiçadeiras na
-  //   faixa sul, mesa redonda + 4 cadeiras no canto NE, guarda-sol + cadeiras de piscina no canto SE, ducha e
+  //   faixa sul, cadeiras de piscina no canto SE (mesa redonda e guarda-sol removidos em 22/11), ducha e
   //   tochas na faixa oeste, boias na água.
   const { THREE, M, box, cyl, sph, place, add, std, rnd } = ctx;
   const G = () => new THREE.Group();
@@ -58,19 +58,7 @@ function roomVarandaPiscina(ctx) {
   // VARANDA
   // =====================================================================================
 
-  // ---- canto esquerdo (x 0–1): palmeira em vaso branco grande ----
-  {
-    const g = G();
-    g.add(cyl(0.27, 0.2, 0.55, ceramic, 0, 0.275, 0, 16));
-    g.add(cyl(0.24, 0.24, 0.02, M.soil, 0, 0.56, 0, 12));
-    g.add(cyl(0.035, 0.05, 0.5, M.trunk, 0, 0.8, 0, 8));
-    for (let i = 0; i < 5; i++) {
-      // frondes apontando para longe da porta do casal (evita o vão x 1,0–1,9)
-      const a = -1.2 + (i / 4) * 2.4 + (rnd() - 0.5) * 0.3, tilt = 0.55 + rnd() * 0.3, len = 0.85 + rnd() * 0.2;
-      g.add(leaf(i % 2 ? M.plant : M.leaf2, 0.13, len, 0, 1.05, 0, tilt, a));
-    }
-    place(g, 0.5, 4.66);
-  }
+  // 22/11: removido a pedido do João (palmeira em vaso do canto esquerdo)
 
   // ---- rede (hammock) armada entre gancho na parede x=0 e coluna de madeira, ao longo da parede externa ----
   {
@@ -110,7 +98,7 @@ function roomVarandaPiscina(ctx) {
 
   // ---- capacho na porta para o deck (x 2,9–3,8) + vaso entre a janela e a porta do quarto ----
   add(box(0.72, 0.015, 0.45, coir, 3.35, 0.02, 5.88, { cast: false }));
-  place(ctx.F.plant(0.9, 5), 3.66, 4.6);
+  // 22/11: removido a pedido do João (vaso junto à porta do quarto)
 
   // ---- sofá de fibra marinho com almofadas de linho, centrado na janela da varanda (x 4,6–6,6) ----
   {
@@ -193,9 +181,7 @@ function roomVarandaPiscina(ctx) {
     add(cyl(0.04, 0.04, 0.5, M.dark, x, 0.25, 6.7, 10));
     add(cyl(0.055, 0.055, 0.1, lampOn, x, 0.55, 6.7, 10));
   }
-  for (const [x, z] of [[4.6, 6.72], [7.5, 6.72], [2.68, 8.6]]) {      // arbustos baixos
-    const s = sph(0.26 + rnd() * 0.06, rnd() < 0.5 ? M.plant : M.leaf2, x, 0.2, z); s.scale.y = 0.75; add(s);
-  }
+  // 22/11: removido a pedido do João (arbustos baixos do deck)
 
   // =====================================================================================
   // DECK DA PISCINA
@@ -232,17 +218,9 @@ function roomVarandaPiscina(ctx) {
   add(put(cyl(0.06, 0.06, 0.28, navy, 0, 0, 0, 12), 6.03, 0.525, 12.0, 0, 0, Math.PI / 2));
   add(cyl(0.025, 0.025, 0.14, M.white, 6.14, 0.535, 12.15, 8));
 
-  // ---- canto SE: guarda-sol marinho/branco com mesinha no mastro, 2 caipirinhas, 2 cadeiras de piscina, cooler ----
+  // 22/11: removido a pedido do João (guarda-sol, mastro, mesinha e caipirinhas)
+  // ---- canto SE: 2 cadeiras de piscina e cooler ----
   {
-    const x = 10.05, z = 12.05;
-    add(cyl(0.3, 0.32, 0.05, stone, x, 0.025, z, 20));                               // base de pedra
-    add(cyl(0.03, 0.03, 2.4, teak, x, 1.2, z, 10));                                   // mastro de madeira
-    const c = new THREE.Mesh(new THREE.ConeGeometry(1.0, 0.34, 12, 1, true), canopy); c.position.set(x, 2.28, z); c.castShadow = true; add(c);
-    const c2 = new THREE.Mesh(new THREE.ConeGeometry(0.4, 0.14, 12, 1, true), canopyW); c2.position.set(x, 2.5, z); c2.castShadow = true; add(c2);
-    add(sph(0.03, teak, x, 2.6, z));
-    add(cyl(0.32, 0.32, 0.03, teak, x, 0.55, z, 20));                                 // mesinha no mastro
-    add(cyl(0.032, 0.032, 0.12, lime, x - 0.15, 0.625, z + 0.08, 10));
-    add(cyl(0.032, 0.032, 0.12, lime, x + 0.17, 0.625, z - 0.06, 10));
     const poolChair = () => {                                                           // cadeira de piscina (tela marinho, tubo branco)
       const g = G();
       g.add(put(box(0.5, 0.03, 0.5, navy, 0, 0, 0), 0, 0.3, 0, -0.2));
@@ -258,20 +236,7 @@ function roomVarandaPiscina(ctx) {
     add(box(0.5, 0.4, 0.36, navy, 8.65, 0.2, 12.15)); add(box(0.52, 0.06, 0.38, M.white, 8.65, 0.43, 12.15)); // cooler
   }
 
-  // ---- canto NE: mesa redonda de teca com 4 cadeiras de fibra (cubo) + lanterna ----
-  {
-    const tx = 9.95, tz = 7.75;
-    add(cyl(0.5, 0.5, 0.035, teak, tx, 0.74, tz, 32)); add(cyl(0.03, 0.03, 0.7, blk, tx, 0.36, tz, 10)); add(cyl(0.26, 0.28, 0.025, blk, tx, 0.013, tz, 24));
-    add(box(0.12, 0.18, 0.12, M.glass, tx, 0.85, tz, { cast: false })); add(box(0.13, 0.02, 0.13, M.dark, tx, 0.95, tz)); add(sph(0.035, lampOn, tx, 0.8, tz)); // lanterna com vela
-    const fibraChair = () => {
-      const g = G();
-      g.add(box(0.5, 0.38, 0.5, fibra, 0, 0.19, 0));
-      g.add(box(0.46, 0.08, 0.46, linen, 0, 0.42, 0.02));
-      g.add(box(0.5, 0.42, 0.08, fibra, 0, 0.59, -0.21));
-      return g;
-    };
-    for (const [cx, cz, ry] of [[tx, tz - 0.75, 0], [tx, tz + 0.75, Math.PI], [tx - 0.75, tz, Math.PI / 2], [tx + 0.75, tz, -Math.PI / 2]]) place(fibraChair(), cx, cz, ry);
-  }
+  // 22/11: removido a pedido do João (mesa redonda, 4 cadeiras e lanterna)
 
   // ---- faixa oeste: ducha de piscina (chuveirão) sobre estrado de madeira, vaso grande, tocha ----
   {
@@ -282,16 +247,7 @@ function roomVarandaPiscina(ctx) {
     add(cyl(0.1, 0.1, 0.02, M.chrome, x + 0.28, 2.13, z, 16));                        // crivo
     add(put(cyl(0.03, 0.03, 0.04, M.chrome, 0, 0, 0, 10), x + 0.05, 1.0, z, 0, 0, Math.PI / 2)); // registro
   }
-  const agavePot = (x, z) => {
-    add(cyl(0.25, 0.19, 0.5, ceramic, x, 0.25, z, 16)); add(cyl(0.22, 0.22, 0.02, M.soil, x, 0.5, z, 12));
-    for (let i = 0; i < 4; i++) add(leaf(agave, 0.07, 1.0 + rnd() * 0.2, x, 0.5, z, 0.3 + rnd() * 0.15, (i / 4) * Math.PI * 2 + rnd() * 0.5, 0.35, 4));
-  };
-  const spherePot = (x, z) => {
-    add(cyl(0.25, 0.19, 0.5, ceramic, x, 0.25, z, 16)); add(cyl(0.22, 0.22, 0.02, M.soil, x, 0.5, z, 12));
-    add(sph(0.32, M.plant, x, 0.8, z)); add(sph(0.24, M.leaf2, x + 0.12, 0.98, z - 0.1));
-  };
-  spherePot(3.28, 8.45);
-  agavePot(10.6, 10.9);
+  // 22/11: removido a pedido do João (vasos spherePot/agavePot)
   const torch = (x, z) => {
     add(cyl(0.028, 0.032, 1.5, bamboo, x, 0.75, z, 8));
     add(cyl(0.07, 0.045, 0.16, M.dark, x, 1.58, z, 10));
