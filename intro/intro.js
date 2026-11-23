@@ -8,6 +8,7 @@
  *     CasaIntro.init({
  *       el: '#casaIntro',
  *       pasta: 'intro/quadros/', prefixo: 'intro_', ext: '.jpg', quadros: 72, digitos: 3,
+ *       pastaCelular: 'intro/quadros_m/',   // (opcional) quadros 1280x800 para telas < 900 px; sem ela usa <pasta>_m/
  *       titulo: 'Casa Chefe', subtitulo: '...', botao: 'Entrar na casa',
  *       alvo: '#rvStage',        // secao/elemento da maquete (logo apos o #casaIntro)
  *       alvoImg: '.base',        // (opcional) imagem base dentro do alvo: o ultimo quadro se encaixa nela
@@ -40,6 +41,10 @@
 
     var N = opt.quadros || 72, dig = opt.digitos || 3, ext = opt.ext || '.jpg';
     var pasta = opt.pasta || 'quadros/', pref = opt.prefixo || 'intro_';
+    // celular (< 900 px): quadros 1280x800 em <pasta>_m/; computador: 1920x1200 em <pasta>. Se a pasta do celular
+    // nao existir (1o quadro falha), volta para a do computador.
+    var pastaPC = pasta, pastaM = opt.pastaCelular || pasta.replace(/\/?$/, '_m/');
+    if (global.innerWidth < 900 && opt.pastaCelular !== false) pasta = pastaM;
     var len = opt.comprimento || 4;
     var alvo = opt.alvo ? $(opt.alvo) : host.nextElementSibling;
     var alvoImg = opt.alvoImg ? $(opt.alvoImg, alvo) : null;
@@ -77,7 +82,7 @@
         (function (i) {
           var im = new Image(); im.decoding = 'async'; ativos++;
           im.onload = function () { imgs[i] = im; ok[i] = true; carregados++; ativos--; if (i === 0) { W0 = im.naturalWidth; H0 = im.naturalHeight; } carga.style.transform = 'scaleX(' + (carregados / N) + ')'; if (carregados === N) carga.style.opacity = 0; sujo = true; pedeQuadro(); carregaProx(); };
-          im.onerror = function () { ativos--; carregaProx(); };
+          im.onerror = function () { ativos--; if (i === 0 && pasta !== pastaPC && !ok[0]) { pasta = pastaPC; fila = ordem(); } carregaProx(); };
           im.src = nome(i);
         })(fila.shift());
       }
@@ -89,7 +94,7 @@
     function medir() {
       dpr = Math.min(global.devicePixelRatio || 1, 1.5);
       var w = global.innerWidth, h = global.innerHeight;
-      var cap = 1800 / Math.max(w, h) ; if (cap < dpr) dpr = cap;     // limita pixels no celular/telas grandes
+      var cap = 2560 / Math.max(w, h); if (cap < dpr) dpr = cap;     // limita pixels no celular/telas grandes
       cw = Math.round(w * dpr); ch = Math.round(h * dpr);
       if (cv.width !== cw || cv.height !== ch) { cv.width = cw; cv.height = ch; }
       sujo = true;

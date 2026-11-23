@@ -1,0 +1,169 @@
+name: Render premium (nuvem)
+
+on:
+  workflow_dispatch:
+    inputs:
+      teste:
+        description: 'Teste barato (amostras e tamanhos baixos, nao publica)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  actions: write
+
+env:
+  TESTE: ${{ inputs.teste && '1' || '0' }}
+  AMOSTRAS_MAQ: ${{ inputs.teste && '4' || '64' }}
+  ESCALA_MAQ: ${{ inputs.teste && '0.25' || '1.0' }}
+  AMOSTRAS_VOO: ${{ inputs.teste && '4' || '36' }}
+  RES_VOO: ${{ inputs.teste && '480x300' || '1920x1200' }}
+
+jobs:
+  maquete:
+    name: maquete faixa ${{ matrix.k }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        k: [0, 1, 2, 3, 4, 5]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/blender
+      - name: Render da faixa
+        run: |
+          mkdir -p out
+          STRIP="${{ matrix.k }}/6" blender -b -P render-src/montar_v4.py -- main "$AMOSTRAS_MAQ" "$ESCALA_MAQ" "$PWD/out/s${{ matrix.k }}" 2>&1 | grep -E "TEMPO|Error|Traceback" || true
+          ls out/s${{ matrix.k }}
+          test -f "out/s${{ matrix.k }}/pontos.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: maq-${{ matrix.k }}
+          path: out
+          retention-days: 3
+
+  giro:
+    name: giro quadro ${{ matrix.i }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        i: [0, 1, 2, 3, 4, 5, 6, 7]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/blender
+      - name: Render do quadro
+        run: |
+          mkdir -p out/giro
+          GIRO_N=8 GIRO_I="${{ matrix.i }}" blender -b -P render-src/montar_v4.py -- giro "$AMOSTRAS_MAQ" "$ESCALA_MAQ" "$PWD/out/giro" 2>&1 | grep -E "giro|TEMPO|Error|Traceback" || true
+          ls out/giro
+          test -f "out/giro/giro_0$(( ${{ matrix.i }} + 1 )).jpg"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: giro-${{ matrix.i }}
+          path: out/giro/*.jpg
+          retention-days: 3
+
+  voo:
+    name: voo quadros ${{ matrix.a }}-${{ matrix.b }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { a: 1,  b: 6 }
+          - { a: 7,  b: 12 }
+          - { a: 13, b: 18 }
+          - { a: 19, b: 24 }
+          - { a: 25, b: 30 }
+          - { a: 31, b: 36 }
+          - { a: 37, b: 42 }
+          - { a: 43, b: 48 }
+          - { a: 49, b: 54 }
+          - { a: 55, b: 60 }
+          - { a: 61, b: 66 }
+          - { a: 67, b: 72 }
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/blender
+      - name: Render dos quadros
+        run: |
+          mkdir -p out/quadros
+          blender -b -P render-src/montar_intro_v2.py -- 72 "$RES_VOO" "$AMOSTRAS_VOO" "$PWD/out/quadros" ${{ matrix.a }} ${{ matrix.b }} 2>&1 | grep -E "quadro|TEMPO|Error|Traceback" || true
+          ls out/quadros
+          test "$(ls out/quadros/intro_*.jpg | wc -l)" = "6"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: voo-${{ matrix.a }}
+          path: out/quadros/*.jpg
+          retention-days: 3
+
+  montar:
+    name: montar e publicar
+    needs: [maquete, giro, voo]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install pillow numpy
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: maq-*
+          merge-multiple: true
+          path: work/faixas
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: giro-*
+          merge-multiple: true
+          path: work/giro
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: voo-*
+          merge-multiple: true
+          path: work/quadros
+      - name: Costurar, webp e celular
+        run: |
+          ls work/faixas work/giro | head -30
+          python render-src/costurar_v4.py work/faixas 6 work/maquete
+          mkdir -p work/web
+          WEB_OUT="$PWD/work/web" RENDER_TESTE="$TESTE" python render-src/gerar_webp.py work/maquete work/giro
+          RENDER_TESTE="$TESTE" python render-src/quadros_celular.py work/quadros work/quadros_m
+          ls work/web work/quadros | head -60
+          python -c "from PIL import Image; print('canto intro_072 (alvo 14,22,48):', Image.open('work/quadros/intro_072.jpg').convert('RGB').getpixel((4, 4)))"
+      - name: Colocar no site
+        if: ${{ !inputs.teste }}
+        run: |
+          rm -rf render/web intro/quadros intro/quadros_m
+          mkdir -p render/web intro/quadros intro/quadros_m
+          cp work/web/* render/web/
+          cp work/quadros/intro_*.jpg intro/quadros/
+          cp work/quadros_m/intro_*.jpg intro/quadros_m/
+      - name: Guardar resultado do teste
+        if: ${{ inputs.teste }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: resultado-teste
+          path: |
+            work/web
+            work/quadros_m
+          retention-days: 2
+      - name: Commit e push
+        if: ${{ !inputs.teste }}
+        run: |
+          git config user.name LGRSV
+          git config user.email noreply@anthropic.com
+          git add render/web intro/quadros intro/quadros_m
+          git commit -m "Render premium (nuvem)" || { echo "nada a commitar"; exit 0; }
+          git pull --rebase origin main
+          git push origin HEAD:main
+      - name: Disparar o deploy do Pages
+        if: ${{ !inputs.teste }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run jekyll-gh-pages.yml --ref main

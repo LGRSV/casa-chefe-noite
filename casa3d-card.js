@@ -306,6 +306,7 @@ function upModelo(buf, paint) {
   const MAT = {
     pintura: new THREE.MeshPhysicalMaterial({ color: paint, roughness: 0.32, metalness: 0, clearcoat: 1, clearcoatRoughness: 0.04 }),   // branco sólido com verniz
     vermelho: M({ color: 0xd3121b, roughness: 0.25 }),
+    retrovisor: M({ color: 0x1d5bd6, roughness: 0.25 }),   // 22/11: pontas dos retrovisores são AZUIS no carro real
     liga: M({ color: 0x3b3e43, metalness: 0.75, roughness: 0.32 }),
     preto: M({ color: 0x141516, roughness: 0.7 }),
     pretoBrilho: M({ color: 0x08090a, roughness: 0.15 }),
@@ -330,6 +331,16 @@ function upModelo(buf, paint) {
     geo.setAttribute('normal', new THREE.BufferAttribute(new Int8Array(buf, o, e.vc * 3), 3, true)); o += e.vc * 3; al();
     if (e.uv) { geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(buf, o, e.vc * 2), 2)); o += e.vc * 8; }
     geo.setIndex(new THREE.BufferAttribute(e.big ? new Uint32Array(buf, o, e.ic) : new Uint16Array(buf, o, e.ic), 1)); o += e.ic * (e.big ? 4 : 2); al();
+    if (e.k === 'vermelho') {   // o grupo vermelho junta o filete da grade (centro) e as pontas dos retrovisores (laterais): retrovisores em azul
+      const idx = geo.index.array, lado = [], centro = [];
+      for (let t = 0; t < idx.length; t += 3) { const cx = (pos[idx[t] * 3] + pos[idx[t + 1] * 3] + pos[idx[t + 2] * 3]) / 3; (Math.abs(cx) > 0.7 ? lado : centro).push(idx[t], idx[t + 1], idx[t + 2]); }
+      for (const [arr, mat] of [[lado, MAT.retrovisor], [centro, MAT.vermelho]]) {
+        if (!arr.length) continue;
+        const g2 = geo.clone(); g2.setIndex(arr);
+        const m2 = new THREE.Mesh(g2, mat); m2.castShadow = false; m2.receiveShadow = true; g.add(m2);
+      }
+      continue;
+    }
     const m = new THREE.Mesh(geo, MAT[e.k] || MAT.preto);
     m.castShadow = !['vidro', 'lente', 'placa', 'ambar', 'lanterna', 'vermelho', 'grade'].includes(e.k);
     m.receiveShadow = true;
@@ -2186,10 +2197,7 @@ function roomVarandaPiscina(ctx) {
   // =====================================================================================
   // 22/11: removido a pedido do João (pisantes da porta ao deck); o deck continua até a faixa externa (z 6,2-7,2, x 2,9-10,9)
   { const ext = new THREE.Mesh(new THREE.PlaneGeometry(8.0, 1.0), M.deck); ext.rotation.x = -Math.PI / 2; ext.position.set(6.9, 0.02, 6.7); ext.receiveShadow = true; add(ext); }
-  for (const x of [5.9, 9.3]) {                                                        // balizadores de jardim
-    add(cyl(0.04, 0.04, 0.5, M.dark, x, 0.25, 6.7, 10));
-    add(cyl(0.055, 0.055, 0.1, lampOn, x, 0.55, 6.7, 10));
-  }
+  // 22/11: removido a pedido do João (balizadores pretos do deck)
   // 22/11: removido a pedido do João (arbustos baixos do deck)
 
   // =====================================================================================
@@ -2262,7 +2270,8 @@ function roomVarandaPiscina(ctx) {
     add(cyl(0.07, 0.045, 0.16, M.dark, x, 1.58, z, 10));
     add(cyl(0, 0.05, 0.18, flame, x, 1.75, z, 8));
   };
-  torch(3.25, 10.35); torch(3.35, 12.1); torch(7.0, 7.42);
+  // 22/11: removido a pedido do João (tochas pretas em volta da piscina)
+  void torch;
 
   // ---- luzes subaquaticas embutidas nas paredes da piscina (reta + meia-lua), brilho turquesa ----
   {
@@ -2765,9 +2774,7 @@ function roomGaragemJardim(ctx) {
   [[3.35, 6.5], [3.35, 6.9], [10.0, 6.5], [10.0, 6.9]].forEach(([x, z], i) => stone(x, z, i));
 
   // Balizadores minimalistas (coluna preta fosca com fenda de luz âmbar)
-  for (const z of [7.0, 9.2, 11.25]) {
-    add(box(0.07, 0.5, 0.07, P.black, 12.34, 0.25, z)); add(box(0.075, 0.1, 0.012, P.led, 12.34, 0.42, z + 0.04, { cast: false })); add(box(0.08, 0.02, 0.08, P.ironLt, 12.34, 0.51, z));
-  }
+  // 22/11: removido a pedido do João (balizadores pretos do jardim)
 
   // Torneira de jardim no muro (perto da bomba) + mangueira enrolada na grama
   add(cyl(0.012, 0.012, 0.62, M.chrome, 13.3, 0.31, 12.2, 8));

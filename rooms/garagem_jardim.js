@@ -131,9 +131,7 @@ function roomGaragemJardim(ctx) {
   [[3.35, 6.5], [3.35, 6.9], [10.0, 6.5], [10.0, 6.9]].forEach(([x, z], i) => stone(x, z, i));
 
   // Balizadores minimalistas (coluna preta fosca com fenda de luz âmbar)
-  for (const z of [7.0, 9.2, 11.25]) {
-    add(box(0.07, 0.5, 0.07, P.black, 12.34, 0.25, z)); add(box(0.075, 0.1, 0.012, P.led, 12.34, 0.42, z + 0.04, { cast: false })); add(box(0.08, 0.02, 0.08, P.ironLt, 12.34, 0.51, z));
-  }
+  // 22/11: removido a pedido do João (balizadores pretos do jardim)
 
   // Torneira de jardim no muro (perto da bomba) + mangueira enrolada na grama
   add(cyl(0.012, 0.012, 0.62, M.chrome, 13.3, 0.31, 12.2, 8));

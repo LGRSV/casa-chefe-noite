@@ -180,10 +180,7 @@ function roomVarandaPiscina(ctx) {
   // =====================================================================================
   // 22/11: removido a pedido do João (pisantes da porta ao deck); o deck continua até a faixa externa (z 6,2-7,2, x 2,9-10,9)
   { const ext = new THREE.Mesh(new THREE.PlaneGeometry(8.0, 1.0), M.deck); ext.rotation.x = -Math.PI / 2; ext.position.set(6.9, 0.02, 6.7); ext.receiveShadow = true; add(ext); }
-  for (const x of [5.9, 9.3]) {                                                        // balizadores de jardim
-    add(cyl(0.04, 0.04, 0.5, M.dark, x, 0.25, 6.7, 10));
-    add(cyl(0.055, 0.055, 0.1, lampOn, x, 0.55, 6.7, 10));
-  }
+  // 22/11: removido a pedido do João (balizadores pretos do deck)
   // 22/11: removido a pedido do João (arbustos baixos do deck)
 
   // =====================================================================================
@@ -256,7 +253,8 @@ function roomVarandaPiscina(ctx) {
     add(cyl(0.07, 0.045, 0.16, M.dark, x, 1.58, z, 10));
     add(cyl(0, 0.05, 0.18, flame, x, 1.75, z, 8));
   };
-  torch(3.25, 10.35); torch(3.35, 12.1); torch(7.0, 7.42);
+  // 22/11: removido a pedido do João (tochas pretas em volta da piscina)
+  void torch;
 
   // ---- luzes subaquaticas embutidas nas paredes da piscina (reta + meia-lua), brilho turquesa ----
   {

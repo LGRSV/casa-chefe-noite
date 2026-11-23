@@ -364,8 +364,8 @@
         <ul class="ticks"><li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>Maquete a partir da planta</li><li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>Painel no celular, tablet ou TV</li><li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>Alexa e Home Assistant juntos</li></ul>
       </div>
       <div class="duo rev">
-        <figure class="stagecard big"><img src="render/web/noite.webp" alt="Maquete da casa com todos os cômodos acesos" loading="lazy" width="2400" height="1500"><figcaption>Noite</figcaption></figure>
-        <figure class="stagecard"><img src="render/web/base.webp" alt="Maquete da casa em corte, vista de cima" loading="lazy" width="2400" height="1500"><figcaption>Dia</figcaption></figure>
+        <figure class="stagecard big"><img src="render/web/noite.webp" alt="Maquete da casa com todos os cômodos acesos" loading="lazy" width="2880" height="1800"><figcaption>Noite</figcaption></figure>
+        <figure class="stagecard"><img src="render/web/base.webp" alt="Maquete da casa em corte, vista de cima" loading="lazy" width="2880" height="1800"><figcaption>Dia</figcaption></figure>
       </div>
     </div>
   </div>
@@ -453,9 +453,9 @@
     <h2 class="rev">A sua casa, em <em>maquete</em>.</h2>
     <p class="lead rev">O mesmo painel desta página, com a sua planta.</p>
     <div class="ba rev">
-      <figure class="stagecard"><img src="render/web/base.webp" alt="A planta virou casa: maquete em vista de cima" loading="lazy" width="2400" height="1500"><figcaption>A planta virou casa</figcaption></figure>
+      <figure class="stagecard"><img src="render/web/base.webp" alt="A planta virou casa: maquete em vista de cima" loading="lazy" width="2880" height="1800"><figcaption>A planta virou casa</figcaption></figure>
       <span class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h17M14 6l6 6-6 6"/></svg></span>
-      <figure class="stagecard"><img src="render/web/noite.webp" alt="A casa acesa" loading="lazy" width="2400" height="1500"><figcaption>A casa acesa</figcaption></figure>
+      <figure class="stagecard"><img src="render/web/noite.webp" alt="A casa acesa" loading="lazy" width="2880" height="1800"><figcaption>A casa acesa</figcaption></figure>
     </div>
     <div class="split tight">
       <p class="txt rev">Você manda a planta. A gente monta a maquete 3D do seu imóvel, com os cômodos que acendem e os controles dos seus aparelhos. Serve de painel no celular, no tablet ou na TV. Preço sob orçamento.</p>
@@ -511,7 +511,7 @@ document.addEventListener('DOMContentLoaded', function () {
   document.querySelectorAll('#pitch .rev').forEach(function (el) { if (io) io.observe(el); else el.classList.add('in'); });
   if (!b.classList.contains('rv') || b.classList.contains('mode3d') || !window.CasaIntro) return;
   CasaIntro.init({
-    el: '#casaIntro', pasta: 'intro/quadros/', prefixo: 'intro_', ext: '.jpg', quadros: 72, digitos: 3,
+    el: '#casaIntro', pasta: 'intro/quadros/', prefixo: 'intro_', ext: '.jpg', quadros: 72, digitos: 3, pastaCelular: 'intro/quadros_m/',
     sobretitulo: 'Home Tech Palmas · automação residencial', titulo: 'Sua casa inteira, na palma da mão.',
     subtitulo: 'Maquete 3D feita da sua planta, ligada aos aparelhos de verdade.', botao: 'Entrar na casa',
     alvo: '#maqSec', alvoImg: '.base', comprimento: 4
