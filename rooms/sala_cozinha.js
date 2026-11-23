@@ -112,12 +112,12 @@ function roomSalaCozinha(ctx) {
     g.add(mesh(new THREE.CylinderGeometry(0.33, 0.33, 0.34, 14, 1, true, Math.PI - 0.62, 1.24), oakBack, 0, 0.665, 0.12));
     return g;
   };
-  // Mesa oval 1,5 × 0,95: tampo de carvalho fino, pernas pretas finas
+  // Mesa oval 1,7 × 0,95: tampo de carvalho fino, pernas pretas finas
   const table = () => {
     const g = G();
-    const top = cyl(1, 1, 0.035, oak, 0, 0.76, 0, 48); top.scale.set(0.75, 1, 0.475); g.add(top);
-    for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) g.add(cyl(0.016, 0.013, 0.74, black, sx * 0.5, 0.37, sz * 0.25, 8));
-    g.add(box(1.0, 0.03, 0.02, black, 0, 0.72, 0)); g.add(box(0.02, 0.03, 0.46, black, -0.5, 0.72, 0)); g.add(box(0.02, 0.03, 0.46, black, 0.5, 0.72, 0));
+    const top = cyl(1, 1, 0.035, oak, 0, 0.76, 0, 48); top.scale.set(0.85, 1, 0.475); g.add(top);
+    for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) g.add(cyl(0.016, 0.013, 0.74, black, sx * 0.6, 0.37, sz * 0.25, 8));
+    g.add(box(1.2, 0.03, 0.02, black, 0, 0.72, 0)); g.add(box(0.02, 0.03, 0.46, black, -0.6, 0.72, 0)); g.add(box(0.02, 0.03, 0.46, black, 0.6, 0.72, 0));
     return g;
   };
   // Centro de mesa: caminho de linho + fruteira de cerâmica (posicionar a y = tampo)
@@ -192,11 +192,12 @@ function roomSalaCozinha(ctx) {
   place(coffeeTable(), 7.68, 0.98);
   place(armchair(), 8.72, 1.3, -2.1);
   place(F.rug(1.9, 1.5, 0xd9cdb4), 7.68, 1.25);                                                  // tapete de lã creme
-  // Sala de jantar: tapete claro, mesa oval, 4 cadeiras (lado do balcão livre para as banquetas), centro de mesa
-  place(F.rug(1.7, 1.5, 0xd5c8ad), 9.2, 3.1);
-  place(table(), 9.08, 3.12);
-  place(tableTop(), 9.08, 3.12, 0, 0.778);
-  for (const [cx, cz, ry] of [[8.1, 3.12, Math.PI / 2], [10.06, 3.12, -Math.PI / 2], [8.74, 3.84, Math.PI], [9.42, 3.84, Math.PI]]) {
+  // Sala de jantar (22/11, a pedido do João): mesa de madeira clara oval 1,7 x 0,95 com 6 cadeiras (2 nas pontas, 2 em cada lado
+  // maior), recuada para z 3,4 para as cadeiras do lado do balcão não baterem nas banquetas (z 2,45)
+  place(F.rug(2.5, 1.9, 0xd5c8ad), 9.2, 3.35);
+  place(table(), 9.2, 3.4);
+  place(tableTop(), 9.2, 3.4, 0, 0.778);
+  for (const [cx, cz, ry] of [[8.12, 3.4, Math.PI / 2], [10.28, 3.4, -Math.PI / 2], [8.85, 3.88, Math.PI], [9.55, 3.88, Math.PI], [8.85, 2.94, 0], [9.55, 2.94, 0]]) {
     place(chair(), cx, cz, ry + (rnd() - 0.5) * 0.12);
   }
   // BALCÃO de cozinha (península baixa) EM FRENTE À GELADEIRA, a ~0,8 m dela: base de nogueira, tampo de pedra clara com
@@ -279,11 +280,6 @@ function roomSalaCozinha(ctx) {
   put(cyl(0.055, 0.055, 0.24, paper, 12.3, 1.01, 3.1, 14));
   put(cyl(0.13, 0.12, 0.5, inox, 12.15, 0.25, 3.55, 20));
   put(cyl(0.135, 0.135, 0.03, black, 12.15, 0.515, 3.55, 20));
-  // Mesa de cozinha de madeira (0,8 x 0,8) no espaço livre do meio, 3 cadeiras, tapete; folga dos armários e do balcão
-  place(F.rug(1.3, 1.5, 0xb7b896), 11.1, 2.7);
-  put(box(0.84, 0.035, 0.84, oak, 11.1, 0.76, 2.7));
-  for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) put(box(0.05, 0.74, 0.05, black, 11.1 + sx * 0.37, 0.37, 2.7 + sz * 0.37));
-  put(box(0.5, 0.012, 0.18, cream, 11.1, 0.784, 2.7)); put(cyl(0.09, 0.07, 0.04, ceramic, 11.1, 0.805, 2.7, 20));
-  for (const [cx, cz, ry] of [[11.1, 2.17, 0], [11.1, 3.23, Math.PI], [10.5, 2.7, Math.PI / 2]]) place(chair(), cx, cz, ry);
+  // 22/11: removido a pedido do João (mesinha de 3 cadeiras da cozinha e o tapete dela; a mesa de jantar de madeira fica na sala)
   // 22/11: removido a pedido do João (prateleira na antiga meia-parede x=10,3 — divisória não existe)
 }

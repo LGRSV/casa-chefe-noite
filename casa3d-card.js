@@ -28,6 +28,7 @@ const GOV = {
 const DEFAULT_CONFIG = {
   title: 'Casa 3D', labels: true, mode: 'night', night_vision: true, panel: true, roof: false,
   look: 'classico',   // 'maquete' = maquete clara de estúdio sobre fundo transparente, painel do cômodo à direita · 'classico' = visual de antes
+  static_view: false,   // true = camera parada: tocar num comodo so seleciona (sem voo/zoom) e sem giro automatico; arrastar para girar continua
   quality: 'auto', car_color: '#f3f3f0', entities: {},   // auto | alta | media | leve | min
   car_model: true,   // v1.10: up! TSI do modelo 3D (modelos/up-tsi.bin); false = carro desenhado; texto = outra URL do arquivo
   latitude: -10.2, longitude: -48.3, timezone: 'America/Sao_Paulo', orientation: 180,
@@ -220,6 +221,7 @@ function fmtRel(ts, now = Date.now()) {   // espaços inseparáveis: "há 3 d" n
   if (d < 45) return 'agora'; if (d < 3600) return `há\u00a0${Math.round(d / 60)}\u00a0min`; if (d < 86400) return `há\u00a0${Math.round(d / 3600)}\u00a0h`;
   const days = Math.round(d / 86400); return days === 1 ? 'ontem' : `há\u00a0${days}\u00a0d`;
 }
+const CAM_ICON = '<svg viewBox="0 0 256 256" width="16" height="16" fill="currentColor" aria-hidden="true"><path d="M208,56H180.28L166.65,35.56A8,8,0,0,0,160,32H96a8,8,0,0,0-6.65,3.56L75.71,56H48A24,24,0,0,0,24,80V192a24,24,0,0,0,24,24H208a24,24,0,0,0,24-24V80A24,24,0,0,0,208,56Zm8,136a8,8,0,0,1-8,8H48a8,8,0,0,1-8-8V80a8,8,0,0,1,8-8H80a8,8,0,0,0,6.66-3.56L100.28,48h55.43l13.63,20.44A8,8,0,0,0,176,72h32a8,8,0,0,1,8,8ZM128,88a44,44,0,1,0,44,44A44.05,44.05,0,0,0,128,88Zm0,72a28,28,0,1,1,28-28A28,28,0,0,1,128,160Z"/></svg>';   // Phosphor camera
 const iconSvg = (k, i = ICONS[k] || ICONS.bulb) => `<svg viewBox="0 0 256 256" width="15" height="15" fill="currentColor" aria-hidden="true"><path${i.f ? ' class="r"' : ''} d="${i.r}"/>${i.f ? `<path class="f" d="${i.f}"/>` : ''}</svg>`;   // r = regular (desligado), f = fill (ligado; o CSS troca)
 
 // ---------------------------------------------------------------------------
@@ -234,7 +236,7 @@ const ZONES = {
   quarto:       { x: 3.6,  z: 0,    w: 3.2,  d: 4.2, color: 0xb18b5f, label: 'Quarto',        lp: [5.2, 1.2], item: 'quarto' },
   sala:         { x: 6.8,  z: 0,    w: 3.5,  d: 4.2, color: 0xd8d3c6, label: 'Sala', lp: [8.5, 2.9], item: 'sala' },
   balcao:       { x: 10.3, z: 0,    w: 2.2,  d: 4.2, color: 0xd8d3c6, label: 'Cozinha',        lp: [11.4, 1.2], item: 'balcao' },
-  varanda:      { x: 0,    z: 4.2,  w: 12.5, d: 2.0, color: 0xc6bda8, label: 'Varanda',       lp: [6.25, 5.2], item: 'externa' },
+  varanda:      { x: 0,    z: 4.2,  w: 12.5, d: 2.0, color: 0xc6bda8, label: 'Área externa',  lp: [6.25, 5.2], item: 'externa' },
   banheiro:     { x: 0,    z: 6.2,  w: 2.4,  d: 2.6, color: 0xcfd7da, label: 'Banheiro',      lp: [1.2, 7.5], item: 'banheiro' },
   dispensa:     { x: 0,    z: 8.8,  w: 2.4,  d: 1.8, color: 0xcbc4b6, label: 'Dispensa',      lp: [1.2, 9.7], item: 'banheiro' },
   garagem:      { x: 0,    z: 10.6, w: 3.0,  d: 5.4, color: 0x7e7e7a, label: 'Garagem',       lp: [1.5, 13.3], item: 'garagem' },
@@ -255,9 +257,9 @@ const PLACES = [
     { id: 'quarto_casal', label: 'Quarto Casal', rects: [zr('quarto_casal')] },
     { id: 'quarto', label: 'Quarto', rects: [zr('quarto')] },
     { id: 'sala', label: 'Sala', rects: [zr('sala')] },
-    { id: 'balcao', label: 'Cozinha', rects: [zr('balcao')] },
-    { id: 'varanda', label: 'Varanda', rects: [zr('varanda')] }] },
+    { id: 'balcao', label: 'Cozinha', rects: [zr('balcao')] }] },
   { id: 'fundos', label: 'Área externa', rooms: [
+    { id: 'varanda', label: 'Área externa', rects: [zr('varanda')] },
     { id: 'piscina', label: 'Piscina', rects: [[DECK.x, DECK.z, DECK.w, DECK.d]] },
     { id: 'jardim', label: 'Jardim', rects: [zr('jardim')] },
     { id: 'quintal', label: 'Quintal', rects: [[3.0, 12.4, 10.4, 3.6]] },
@@ -920,13 +922,14 @@ function mergeStatic(scene) {
       g.applyMatrix4(o.matrixWorld); parts.push(g); total += g.attributes.position.count;
     }
     const pos = new Float32Array(total * 3), nor = new Float32Array(total * 3), uv = new Float32Array(total * 2);
-    let off = 0;
+    let off = 0; const spans = [];
     for (const g of parts) {
       const n = g.attributes.position.count;
       pos.set(g.attributes.position.array, off * 3); nor.set(g.attributes.normal.array, off * 3); uv.set(g.attributes.uv.array, off * 2);
+      g.computeBoundingBox(); spans.push([off, n, g.boundingBox]);   // peças de origem (início, nº de vértices, caixa): a vista de cômodo esconde cortinas da parede cortada
       off += n; g.dispose();
     }
-    const merged = new THREE.BufferGeometry();
+    const merged = new THREE.BufferGeometry(); merged.camParts = spans;   // fora do userData: não vai para o .glb exportado
     merged.setAttribute('position', new THREE.BufferAttribute(pos, 3));
     merged.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
     merged.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
@@ -958,6 +961,7 @@ class Orbit {
     this.minDist = 5; this.maxDist = 64; this.minPolar = 0.03; this.maxPolar = 1.45;
     this.speed = 9; this.userAt = 0;   // speed: suavização (menor = voo mais lento); userAt: último gesto do usuário
     this.pointers = new Map(); this.moved = 0; this.vel = 0; this.touched = false;   // vel: inércia do giro (rad/s)
+    this.lockAt = null; this.thetaLim = null;   // lockAt: alvo FIXO da órbita (Vector3) enquanto card._orbitLocked() — sem pan, o zoom só muda o raio · thetaLim: [min, max] do giro (vista de cômodo)
     this.onClick = null; this.onHover = null; this.enabled = true;   // enabled = false na visão de pessoa (o Walker assume os gestos)
     this._down = (e) => this.down(e); this._move = (e) => this.move(e);
     this._up = (e) => this.up(e); this._wheel = (e) => this.wheel(e);
@@ -1036,6 +1040,7 @@ class Orbit {
     _oRay.setFromCamera(_oNdc.set((cx - rc.left) / rc.width * 2 - 1, -(cy - rc.top) / rc.height * 2 + 1), this.camera);
     const o = _oRay.ray.origin, d = _oRay.ray.direction; if (d.y > -1e-3) return;
     const P = o.clone().addScaledVector(d, -o.y / d.y);
+    if (this._locked()) return;   // alvo fixo: só aproxima/afasta
     this.targetGoal.sub(P).multiplyScalar(r1 / r0).add(P); this._clampT();
   }
   up(e) {
@@ -1053,7 +1058,9 @@ class Orbit {
   }
   wheel(e) { e.preventDefault(); if (!this.enabled) return; this.vel = 0; this.touched = true; this.userAt = performance.now(); this.speed = 9; this.zoomBy(Math.exp(e.deltaY * 0.0012)); this.dirty = true; }
   zoomBy(f) { this.goal.radius = clamp(this.goal.radius * f, this.minDist, this.maxDist); }
+  _locked() { return !!(this.lockAt && this.card && this.card._orbitLocked && this.card._orbitLocked()); }
   pan(dx, dy) {
+    if (this._locked()) return;   // alvo fixo: sem pan
     const k = this.goal.radius * 0.0016;
     const fwd = new THREE.Vector3(); this.camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
     const right = new THREE.Vector3().crossVectors(fwd, new THREE.Vector3(0, 1, 0)).normalize();
@@ -1072,9 +1079,11 @@ class Orbit {
   fly(pos, target, speed = 2.6) { this.reset(pos, target); this.speed = speed; }
   update(dt) {
     const k = 1 - Math.exp(-dt * this.speed);
+    if (this._locked()) this.targetGoal.copy(this.lockAt);   // o alvo volta (suave) e fica no centro fixo
     if (this.vel) { this.goal.theta += this.vel * dt; this.vel *= Math.pow(0.998, dt * 1000); if (Math.abs(this.vel) < 0.02) this.vel = 0; }   // inércia (0,998 por ms)
     // vista geral girando devagar quando ninguém mexe (~6 s parado); card._autoOrbitOk() recusa em reduced-motion, painel, Pessoa e Vista de cima
     if (!this.vel && !this.pointers.size && this.enabled && this.card && this.card._autoOrbitOk && performance.now() - this.userAt > 6000 && this.card._autoOrbitOk()) this.goal.theta += 0.045 * dt;
+    if (this.thetaLim) { const lo = this.thetaLim[0], hi = this.thetaLim[1]; if ((this.goal.theta <= lo && this.vel < 0) || (this.goal.theta >= hi && this.vel > 0)) this.vel = 0; this.goal.theta = clamp(this.goal.theta, lo, hi); }
     const s = this.sph;
     s.theta += (this.goal.theta - s.theta) * k;
     s.phi += (this.goal.phi - s.phi) * k;
@@ -1404,8 +1413,7 @@ function roomQuartoCasal(ctx) {
   base(3.45, 0.015, 1.8, 0.0825);      // fundo
   base(0.015, 4.05, 0.0825, 2.1);      // esquerda
   base(0.015, 4.05, 3.5175, 2.1);      // direita
-  base(0.925, 0.015, 0.5375, 4.1175);  // frente, à esquerda da porta
-  base(1.625, 0.015, 2.7125, 4.1175);  // frente, à direita da porta
+  base(3.45, 0.015, 1.8, 4.1175);  // frente (22/11: sem porta, rodapé contínuo)
 
   // ---------------- tapete + cama + criados + abajures + objetos ----------------
   place(rug(), 1.8, 2.10);                                   // x 0,8–2,8 · z 1,0–3,2 (livre do giro da porta)
@@ -1431,14 +1439,14 @@ function roomQuartoCasal(ctx) {
   add(cyl(0.185, 0.185, 0.03, wicker, 0.33, 0.515, 2.0, 14));
 
   // ---------------- cômoda com espelho redondo (parede direita) + objetos ----------------
-  place(dresser(), 3.22, 2.95, -Math.PI / 2);                // x 2,995–3,445 · z 2,45–3,45; frente para -x
-  const mirrorFrame = cyl(0.29, 0.29, 0.02, walnutDk, 3.514, 1.45, 2.95, 28); mirrorFrame.rotation.z = Math.PI / 2; add(mirrorFrame);
-  const mirrorGlass = cyl(0.26, 0.26, 0.006, M.mirror, 3.501, 1.45, 2.95, 28); mirrorGlass.rotation.z = Math.PI / 2; mirrorGlass.castShadow = false; add(mirrorGlass);
-  add(box(0.30, 0.015, 0.20, brass, 3.28, 0.8575, 2.70));                 // bandeja
-  add(box(0.05, 0.10, 0.03, amber, 3.24, 0.915, 2.66));                   // perfumes
-  add(box(0.04, 0.13, 0.04, amber, 3.33, 0.93, 2.73));
-  add(put(box(0.012, 0.15, 0.12, walnutDk, 0, 0, 0), 3.30, 0.925, 3.15, 0, 0, -0.12)); // porta-retrato inclinado
-  add(cyl(0.035, 0.035, 0.06, linenLt, 3.25, 0.88, 3.32, 12));            // vela
+  place(dresser(), 3.22, 2.2, -Math.PI / 2);                // x 2,995–3,445 · z 2,45–3,45; frente para -x
+  const mirrorFrame = cyl(0.29, 0.29, 0.02, walnutDk, 3.514, 1.45, 2.2, 28); mirrorFrame.rotation.z = Math.PI / 2; add(mirrorFrame);
+  const mirrorGlass = cyl(0.26, 0.26, 0.006, M.mirror, 3.501, 1.45, 2.2, 28); mirrorGlass.rotation.z = Math.PI / 2; mirrorGlass.castShadow = false; add(mirrorGlass);
+  add(box(0.30, 0.015, 0.20, brass, 3.28, 0.8575, 1.95));                 // bandeja
+  add(box(0.05, 0.10, 0.03, amber, 3.24, 0.915, 1.91));                   // perfumes
+  add(box(0.04, 0.13, 0.04, amber, 3.33, 0.93, 1.98));
+  add(put(box(0.012, 0.15, 0.12, walnutDk, 0, 0, 0), 3.30, 0.925, 2.40, 0, 0, -0.12)); // porta-retrato inclinado
+  add(cyl(0.035, 0.035, 0.06, linenLt, 3.25, 0.88, 2.57, 12));            // vela
   // 22/11: removido a pedido do João (planta no canto da janela da frente)
 
   // ---------------- janela do fundo: persiana rolô (meio aberta) + cortinas de linho ----------------
@@ -1629,7 +1637,7 @@ function roomQuarto(ctx) {
     const cush = rb(0.34, 0.06, 0.26, terra, 0.14, 0.7, -0.84, 0.04); cush.rotation.x = 1.2; g.add(cush); // almofada na cabeceira
     g.add(rb(1.22, 0.86, 0.09, upholst, 0, 0.55, -0.97, 0.05));                         // cabeceira estofada larga
     g.add(box(1.0, 0.012, 0.012, glow, 0, 0.99, -0.915, { cast: false }));            // LED atrás da cabeceira
-    place(g, 6.14, 3.1, Math.PI);
+    place(g, 5.25, 3.1, Math.PI);   // 22/11: cama deslocada para a esquerda para liberar a porta nova x=6,8 z 3,0-3,85
   }
 
   // ---- criado-mudo pequeno junto à cabeceira --------------------------------
@@ -1642,9 +1650,9 @@ function roomQuarto(ctx) {
     g.add(cyl(0.045, 0.06, 0.1, ceramic, 0.07, 0.585, 0, 20));                         // luminária: base
     g.add(cyl(0.075, 0.1, 0.13, shade, 0.07, 0.7, 0, 20, true));                       // cúpula acesa
     g.add(box(0.1, 0.05, 0.04, M.dark, -0.1, 0.555, 0.06));                           // despertador
-    place(g, 5.4, 3.9, Math.PI);
+    place(g, 4.5, 3.9, Math.PI);
   }
-  for (const s of [0, 1]) { const sl = box(0.1, 0.03, 0.26, grey, 5.42 + s * 0.12, 0.015, 3.2); sl.rotation.y = 0.15; add(sl); } // chinelos
+  for (const s of [0, 1]) { const sl = box(0.1, 0.03, 0.26, grey, 4.35 + s * 0.12, 0.015, 3.2); sl.rotation.y = 0.15; add(sl); } // chinelos
 
   // ---- guarda-roupa 2 portas na parede direita (antes da TV) ----------------
   {
@@ -1696,7 +1704,8 @@ function roomQuarto(ctx) {
     g.add(box(0.006, 0.5, 0.045, M.dark, 0.033, 0.86, 0));                            // escala
     g.add(box(0.02, 0.16, 0.07, woodM, 0.02, 1.19, 0));                               // mão
     g.add(box(0.002, 0.95, 0.03, M.chrome, 0.052, 0.66, 0, { cast: false }));         // cordas
-    const gt = place(g, 3.85, 3.36); gt.rotation.z = 0.12;                            // inclinado contra a parede
+    const gt = place(g, 3.85, 1.5);   // 22/11: fora da porta nova x=3,6 z 3,0-3,85
+     gt.rotation.z = 0.12;                            // inclinado contra a parede
   }
 
   // ---- mochila encostada na parede do fundo, entre a mesa e o guarda-roupa --
@@ -1823,12 +1832,12 @@ function roomSalaCozinha(ctx) {
     g.add(mesh(new THREE.CylinderGeometry(0.33, 0.33, 0.34, 14, 1, true, Math.PI - 0.62, 1.24), oakBack, 0, 0.665, 0.12));
     return g;
   };
-  // Mesa oval 1,5 × 0,95: tampo de carvalho fino, pernas pretas finas
+  // Mesa oval 1,7 × 0,95: tampo de carvalho fino, pernas pretas finas
   const table = () => {
     const g = G();
-    const top = cyl(1, 1, 0.035, oak, 0, 0.76, 0, 48); top.scale.set(0.75, 1, 0.475); g.add(top);
-    for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) g.add(cyl(0.016, 0.013, 0.74, black, sx * 0.5, 0.37, sz * 0.25, 8));
-    g.add(box(1.0, 0.03, 0.02, black, 0, 0.72, 0)); g.add(box(0.02, 0.03, 0.46, black, -0.5, 0.72, 0)); g.add(box(0.02, 0.03, 0.46, black, 0.5, 0.72, 0));
+    const top = cyl(1, 1, 0.035, oak, 0, 0.76, 0, 48); top.scale.set(0.85, 1, 0.475); g.add(top);
+    for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) g.add(cyl(0.016, 0.013, 0.74, black, sx * 0.6, 0.37, sz * 0.25, 8));
+    g.add(box(1.2, 0.03, 0.02, black, 0, 0.72, 0)); g.add(box(0.02, 0.03, 0.46, black, -0.6, 0.72, 0)); g.add(box(0.02, 0.03, 0.46, black, 0.6, 0.72, 0));
     return g;
   };
   // Centro de mesa: caminho de linho + fruteira de cerâmica (posicionar a y = tampo)
@@ -1903,11 +1912,12 @@ function roomSalaCozinha(ctx) {
   place(coffeeTable(), 7.68, 0.98);
   place(armchair(), 8.72, 1.3, -2.1);
   place(F.rug(1.9, 1.5, 0xd9cdb4), 7.68, 1.25);                                                  // tapete de lã creme
-  // Sala de jantar: tapete claro, mesa oval, 4 cadeiras (lado do balcão livre para as banquetas), centro de mesa
-  place(F.rug(1.7, 1.5, 0xd5c8ad), 9.2, 3.1);
-  place(table(), 9.08, 3.12);
-  place(tableTop(), 9.08, 3.12, 0, 0.778);
-  for (const [cx, cz, ry] of [[8.1, 3.12, Math.PI / 2], [10.06, 3.12, -Math.PI / 2], [8.74, 3.84, Math.PI], [9.42, 3.84, Math.PI]]) {
+  // Sala de jantar (22/11, a pedido do João): mesa de madeira clara oval 1,7 x 0,95 com 6 cadeiras (2 nas pontas, 2 em cada lado
+  // maior), recuada para z 3,4 para as cadeiras do lado do balcão não baterem nas banquetas (z 2,45)
+  place(F.rug(2.5, 1.9, 0xd5c8ad), 9.2, 3.35);
+  place(table(), 9.2, 3.4);
+  place(tableTop(), 9.2, 3.4, 0, 0.778);
+  for (const [cx, cz, ry] of [[8.12, 3.4, Math.PI / 2], [10.28, 3.4, -Math.PI / 2], [8.85, 3.88, Math.PI], [9.55, 3.88, Math.PI], [8.85, 2.94, 0], [9.55, 2.94, 0]]) {
     place(chair(), cx, cz, ry + (rnd() - 0.5) * 0.12);
   }
   // BALCÃO de cozinha (península baixa) EM FRENTE À GELADEIRA, a ~0,8 m dela: base de nogueira, tampo de pedra clara com
@@ -1990,16 +2000,13 @@ function roomSalaCozinha(ctx) {
   put(cyl(0.055, 0.055, 0.24, paper, 12.3, 1.01, 3.1, 14));
   put(cyl(0.13, 0.12, 0.5, inox, 12.15, 0.25, 3.55, 20));
   put(cyl(0.135, 0.135, 0.03, black, 12.15, 0.515, 3.55, 20));
-  // Mesa de cozinha de madeira (0,8 x 0,8) no espaço livre do meio, 3 cadeiras, tapete; folga dos armários e do balcão
-  place(F.rug(1.3, 1.5, 0xb7b896), 11.1, 2.7);
-  put(box(0.84, 0.035, 0.84, oak, 11.1, 0.76, 2.7));
-  for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) put(box(0.05, 0.74, 0.05, black, 11.1 + sx * 0.37, 0.37, 2.7 + sz * 0.37));
-  put(box(0.5, 0.012, 0.18, cream, 11.1, 0.784, 2.7)); put(cyl(0.09, 0.07, 0.04, ceramic, 11.1, 0.805, 2.7, 20));
-  for (const [cx, cz, ry] of [[11.1, 2.17, 0], [11.1, 3.23, Math.PI], [10.5, 2.7, Math.PI / 2]]) place(chair(), cx, cz, ry);
+  // 22/11: removido a pedido do João (mesinha de 3 cadeiras da cozinha e o tapete dela; a mesa de jantar de madeira fica na sala)
   // 22/11: removido a pedido do João (prateleira na antiga meia-parede x=10,3 — divisória não existe)
 }
 
 function roomVarandaPiscina(ctx) {
+  // 22/11 (João): o corredor/varanda NÃO existe. Faixa x 0-12,5 · z 4,2-6,2 = ÁREA EXTERNA ABERTA (piso do deck, sem parede em z=6,2, sem forro).
+  //   Portas z=4,2 dos quartos/sala fechadas; só janelas (x 2,5-3,3 e 5,5-6,4) e o vidro da cozinha (x 9,6-12,2). Texto abaixo é histórico.
   // VARANDA coberta — x 0–12,5 · z 4,2–6,2 (faces internas: x 0,075/12,425 · z 4,275/6,125).
   //   Parede da casa (z=4,2): porta casal x 1,0–1,9 · janela x 2,5–3,3 · porta quarto x 4,1–5,0 · janela x 5,5–6,4 ·
   //   porta sala x 7,4–8,3 · vidro do balcão x 9,6–12,2. Parede externa (z=6,2): porta p/ deck x 2,9–3,8 ·
@@ -2098,7 +2105,7 @@ function roomVarandaPiscina(ctx) {
   }
 
   // ---- capacho na porta para o deck (x 2,9–3,8) + vaso entre a janela e a porta do quarto ----
-  add(box(0.72, 0.015, 0.45, coir, 3.35, 0.02, 5.88, { cast: false }));
+  // 22/11: removido a pedido do João (capacho da porta para o deck: a porta e a parede z=6,2 não existem)
   // 22/11: removido a pedido do João (vaso junto à porta do quarto)
 
   // ---- sofá de fibra marinho com almofadas de linho, centrado na janela da varanda (x 4,6–6,6) ----
@@ -2177,7 +2184,8 @@ function roomVarandaPiscina(ctx) {
   // =====================================================================================
   // FAIXA DE GRAMA entre a varanda e o deck (z 6,2–7,2) e à esquerda do deck (x 2,4–2,9)
   // =====================================================================================
-  for (const z of [6.5, 6.92]) add(box(0.55, 0.03, 0.4, stone, 3.35, 0.015, z));     // pisantes da porta ao deck
+  // 22/11: removido a pedido do João (pisantes da porta ao deck); o deck continua até a faixa externa (z 6,2-7,2, x 2,9-10,9)
+  { const ext = new THREE.Mesh(new THREE.PlaneGeometry(8.0, 1.0), M.deck); ext.rotation.x = -Math.PI / 2; ext.position.set(6.9, 0.02, 6.7); ext.receiveShadow = true; add(ext); }
   for (const x of [5.9, 9.3]) {                                                        // balizadores de jardim
     add(cyl(0.04, 0.04, 0.5, M.dark, x, 0.25, 6.7, 10));
     add(cyl(0.055, 0.055, 0.1, lampOn, x, 0.55, 6.7, 10));
@@ -2769,10 +2777,7 @@ function roomGaragemJardim(ctx) {
   tube(loose, [13.2, 0.53, 12.2], [12.98, 0.05, 12.34], 0.013, P.hose);
 
   // ======================= PÁTIO / ENTRADA (asfalto x 2,4–13,4 · z 12,4–16,6) =======================
-  // Vaga de visitante pintada no asfalto, em frente ao vão da garagem (x 3,4–8,0 · z 12,95–15,35) + calço de roda
-  for (const z of [12.95, 15.35]) add(box(4.6, 0.006, 0.1, P.paintWhite, 5.7, 0.018, z, { cast: false }));
-  add(box(0.1, 0.006, 2.5, P.paintWhite, 8.0, 0.018, 14.15, { cast: false }));
-  add(box(0.15, 0.1, 0.55, P.yellow, 7.6, 0.05, 14.15));
+  // 22/11: removido a pedido do João (demarcação branca da vaga de visitante no pátio e o calço de roda; o piso do pátio continua)
 
   // 22/11: removido a pedido do João (caixa de correio do portão de pedestre; portãozinho fechado, muro contínuo)
 
@@ -2881,6 +2886,54 @@ const CSS = `
 .mpan .mpb .b2 { background: transparent; border: 1px solid rgba(255, 255, 255, .3); color: #f2efe8; }
 .mpan .mpb .b2:hover { background: rgba(255, 255, 255, .08); }
 .mpan .mpb button:active { transform: scale(.97); }
+.mpan .mpb { flex-wrap: wrap; }
+.mpan .mpb .b3 { flex: 1 1 100%; order: -1; display: flex; align-items: center; justify-content: center; gap: 9px; background: rgba(227, 198, 140, .12); border: 1px solid rgba(227, 198, 140, .55); color: #f3dcab; }
+.mpan .mpb .b3:hover { background: rgba(227, 198, 140, .22); }
+.mpan .mpb .b3 kbd { font: inherit; font-size: 10px; padding: 1px 6px; border: 1px solid rgba(243, 220, 171, .5); border-radius: 4px; opacity: .75; }
+.camhud { position: absolute; inset: 0; z-index: 9; pointer-events: none; color: #f2efe8; opacity: 0; transition: opacity .4s var(--ease); }
+.camhud[hidden] { display: none; }
+.camhud.on { opacity: 1; }
+.camhud button { font: inherit; cursor: pointer; pointer-events: auto; }
+.camhud button:focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+.camhud .cht { position: absolute; left: 18px; top: 82px; display: flex; align-items: center; gap: 12px; max-width: calc(100% - 36px); }
+.camhud .chb { display: inline-flex; align-items: center; gap: 6px; padding: 10px 16px 10px 12px; border-radius: 999px; background: #0e1424; border: 1px solid rgba(255, 255, 255, .22); color: #f2efe8; font-size: 13px; white-space: nowrap; box-shadow: 0 10px 30px rgba(0, 0, 0, .35); }
+.camhud .chb:hover { background: #18203a; }
+.camhud .chn { display: flex; flex-direction: column; min-width: 0; text-shadow: 0 1px 12px rgba(0, 0, 0, .6); }
+.camhud .chn small { font-size: 10px; letter-spacing: .2em; text-transform: uppercase; color: rgba(235, 235, 245, .75); }
+.camhud .chn b { font-weight: 300; font-size: 26px; line-height: 1.1; letter-spacing: -.02em; color: #fff; }
+.camhud .chbar { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); width: min(calc(100% - 28px), 760px); box-sizing: border-box; display: flex; align-items: stretch; gap: 10px; padding: 10px; background: rgba(14, 20, 36, .94); border: 1px solid rgba(255, 255, 255, .1); border-radius: 18px; box-shadow: 0 24px 60px rgba(0, 0, 0, .5); }
+.camhud .chdev { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.camhud .chnone { padding: 8px 10px; font-size: 12.5px; color: rgba(235, 235, 245, .7); }
+.camhud .chip { flex: 1 1 150px; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 9px 12px; background: rgba(255, 255, 255, .06); border: 1px solid rgba(255, 255, 255, .12); border-radius: 12px; color: #f2efe8; text-align: left; transition: background .2s, border-color .2s; }
+.camhud .chip:hover { background: rgba(255, 255, 255, .11); }
+.camhud .chip .ic { display: grid; place-items: center; width: 30px; height: 30px; border-radius: 50%; background: rgba(255, 255, 255, .08); color: rgba(235, 235, 245, .7); flex: none; }
+.camhud .chip .tx { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+.camhud .chip .tx b { font-weight: 500; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.camhud .chip .tx em { font-style: normal; font-size: 11px; color: rgba(235, 235, 245, .55); }
+.camhud .chip .sw { width: 34px; height: 20px; border-radius: 999px; background: rgba(255, 255, 255, .18); position: relative; flex: none; transition: background .2s; }
+.camhud .chip .sw::after { content: ""; position: absolute; left: 2px; top: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .2s; }
+.camhud .chip.on { background: rgba(255, 181, 71, .14); border-color: rgba(255, 181, 71, .6); }
+.camhud .chip.on .ic { background: #ffb547; color: #2a1a00; }
+.camhud .chip.on .tx em { color: #ffd08a; }
+.camhud .chip.on .sw { background: #ffb547; }
+.camhud .chip.on .sw::after { transform: translateX(14px); }
+.camhud .chall { align-self: center; padding: 11px 18px; border-radius: 999px; background: #f1ece1; border: 1px solid #f1ece1; color: #14110b; font-size: 12.5px; white-space: nowrap; }
+.camhud .chall[hidden] { display: none; }
+.camhud .chall:hover { background: #fff; }
+@media (max-width: 699px) {
+  .camhud .cht { left: 12px; top: 76px; gap: 10px; }
+  .camhud .chn b { font-size: 21px; }
+  .camhud .chbar { bottom: 58px; flex-direction: column; padding: 8px; gap: 8px; }   /* 58: acima do botão fixo 'Voltar à maquete' da página de demonstração */
+  .camhud .chip { flex: 1 1 calc(50% - 8px); min-height: 48px; padding: 7px 10px; gap: 8px; }   /* 48 px: alvo de toque confortável */
+  .camhud .chip .ic { width: 26px; height: 26px; }
+  .camhud .chall { width: 100%; min-height: 46px; padding: 12px; }
+}
+@media (max-width: 479px) {   /* celular em pé: um aparelho por linha, nome inteiro (sem "Luz princ…") */
+  .camhud .chip { flex-basis: 100%; }
+  .camhud .chip .tx { flex-direction: row; align-items: baseline; gap: 8px; }
+  .camhud .chip .tx em { white-space: nowrap; }
+}
+@media (prefers-reduced-motion: reduce) { .camhud, .camhud .chip, .camhud .chip .sw, .camhud .chip .sw::after { transition: none; } }
 @media (max-width: 699px) {
   .mpan { left: 10px; right: 10px; top: auto; bottom: 10px; width: auto; max-height: 55%; padding: 16px 18px 16px; transform: translateY(40px); }
   .mpan h2 { font-size: 28px; margin: 8px 0 12px; }
@@ -3526,6 +3579,7 @@ export class Casa3DCard extends HTMLElement {
     this._fadeEl = document.createElement('div'); this._fadeEl.className = 'fade'; wrap.appendChild(this._fadeEl);
     // Esc/Backspace na Vista de cima sobem um nível; fora dela o Esc volta o painel do cômodo à visão geral (com o menu aberto, o Esc só fecha ele)
     const navKey = (e) => {
+      if (this._camKey(e)) return;   // V abre a vista de câmera do cômodo aberto · Esc na vista volta à casa
       if (this._menuBtn.getAttribute('aria-expanded') === 'true' || (e.key !== 'Escape' && !(e.key === 'Backspace' && this._topView))) return;   // aberto pelo aria-expanded: saindo (150 ms) já conta como fechado
       if (e.key === 'Escape' && this._sel) this._select(null);   // 1º Esc: o balão do aparelho
       else if (this._topView) this._navBack(); else if (this._room) this._showRoom(null); else return;
@@ -3610,6 +3664,7 @@ export class Casa3DCard extends HTMLElement {
     if (this._tight) console.warn(`[casa3d-card] GPU com margem pequena (fragment uniforms ${caps.maxFragmentUniforms}, samplers ${caps.maxTextures}): menos luzes e sombras`);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = this._q === 'alta' || this._q === 'media' ? THREE.PCFSoftShadowMap : this._min ? THREE.BasicShadowMap : THREE.PCFShadowMap;
+    renderer.localClippingEnabled = true;   // corte das paredes na vista de cômodo (_camCut)
     renderer.shadowMap.autoUpdate = false;   // cena estática: sombras só recalculam quando algo muda
     this._renderer = renderer;
 
@@ -3623,7 +3678,7 @@ export class Casa3DCard extends HTMLElement {
     this._camera = camera;
     this._home = this._homeFor(1.6);
     camera.position.copy(this._home.pos); camera.lookAt(this._home.target);
-    this._orbit = new Orbit(camera, canvas, this._home.target); this._orbit.card = this; this._orbit.userAt = performance.now();
+    this._orbit = new Orbit(camera, canvas, this._home.target); this._orbit.card = this; this._orbit.lockAt = this._home.target.clone(); this._orbit.minDist = 9; this._orbit.userAt = performance.now();
     this._orbit.onClick = (e) => this._onClick(e);
     this._orbit.onHover = (e) => this._onHover(e);
 
@@ -3667,7 +3722,8 @@ export class Casa3DCard extends HTMLElement {
       }
       const map = mtex.clone(); map.repeat.set(z.w / tile, z.d / tile);
       const ao = this._min ? null : this._makeAO(z.w, z.d);
-      const mat = new THREE.MeshStandardMaterial({ color: tint, map, roughness: this._maq ? 0.7 : 0.9, bumpMap: this._min ? null : map, bumpScale: this._maq ? 0.15 : 0.6, aoMap: ao, aoMapIntensity: 1.0 });
+      let mat = new THREE.MeshStandardMaterial({ color: tint, map, roughness: this._maq ? 0.7 : 0.9, bumpMap: this._min ? null : map, bumpScale: this._maq ? 0.15 : 0.6, aoMap: ao, aoMapIntensity: 1.0 });
+      if (id === 'varanda') { mat = M.deck.clone(); mat.map = M.deck.map.clone(); const tl = this._maq ? 2.4 : 1.6; mat.map.repeat.set(z.w / tl, z.d / tl); mat.map.needsUpdate = true; }   // 22/11: a faixa z 4,2-6,2 e area externa aberta, com o mesmo piso do deck
       const m = new THREE.Mesh(new THREE.PlaneGeometry(z.w, z.d), mat);
       m.rotation.x = -Math.PI / 2; m.position.set(z.x + z.w / 2, 0.004, z.z + z.d / 2); m.receiveShadow = true;   // pisos a 4 mm: tapetes (≥ 5 mm) ficam por cima sem z-fighting
       m.userData = { item: z.item || null, zone: id }; scene.add(m);
@@ -3676,7 +3732,7 @@ export class Casa3DCard extends HTMLElement {
     }
     this._buildWalls(scene, M);
     // Rodapés nas zonas internas
-    for (const id of ['quarto_casal', 'quarto', 'sala', 'balcao', 'varanda', 'banheiro', 'dispensa']) {
+    for (const id of ['quarto_casal', 'quarto', 'sala', 'balcao', 'banheiro', 'dispensa']) {   // 22/11: sem rodape na area externa
       const z = ZONES[id], i = T / 2 + 0.012, hb = 0.09;
       scene.add(box(z.w - 2 * i, hb, 0.02, M.baseboard, z.x + z.w / 2, hb / 2, z.z + i, { cast: false }));
       scene.add(box(z.w - 2 * i, hb, 0.02, M.baseboard, z.x + z.w / 2, hb / 2, z.z + z.d - i, { cast: false }));
@@ -3749,6 +3805,7 @@ export class Casa3DCard extends HTMLElement {
     const stats = mergeStatic(scene);
     console.info(`[casa3d-card] malhas estáticas: ${stats.before} → ${stats.after} draw calls`);
     this._buildWalkAids();
+    this._camPrep();
 
     this._raycaster = new THREE.Raycaster();
     this._ndc = new THREE.Vector2();
@@ -3888,7 +3945,7 @@ export class Casa3DCard extends HTMLElement {
     slabZ(-0.45, 2.85, 1.2, H, 0.9, 6.35, 10.75);
     slabZ(-0.45, 3.45, 1.5, H, 0.95, 10.45, 16.45);
     // forro (teto) nas zonas internas
-    for (const id of ['quarto_casal', 'quarto', 'sala', 'balcao', 'varanda', 'banheiro', 'dispensa', 'garagem']) {
+    for (const id of ['quarto_casal', 'quarto', 'sala', 'balcao', 'banheiro', 'dispensa', 'garagem']) {   // 22/11: area externa sem forro
       const z = ZONES[id]; const c = new THREE.Mesh(new THREE.PlaneGeometry(z.w, z.d), M.white);
       c.rotation.x = Math.PI / 2; c.position.set(z.x + z.w / 2, H - 0.02, z.z + z.d / 2); c.receiveShadow = true; g.add(c);
     }
@@ -3901,12 +3958,12 @@ export class Casa3DCard extends HTMLElement {
     wallX(0, 0, 12.5, [{ a: 1.2, b: 2.4, t: 'window' }, { a: 4.4, b: 5.6, t: 'window' }, { a: 11.0, b: 12.0, t: 'window' }]);
     wallZ(0, 0, 16.0);
     wallZ(12.5, 0, 6.2);
-    wallZ(3.6, 0, 4.2);
-    wallZ(6.8, 0, 4.2);
+    wallZ(3.6, 0, 4.2, [{ a: 3.0, b: 3.85, t: 'door' }]);   // 22/11: porta nova quarto casal <-> quarto
+    wallZ(6.8, 0, 4.2, [{ a: 3.0, b: 3.85, t: 'door' }]);   // 22/11: porta nova quarto <-> sala/cozinha
     // 22/11: removido a pedido do João (a divisória/meia-parede em x=10,3 não existe: cozinha aberta)
-    wallX(4.2, 0, 12.5, [{ a: 1.0, b: 1.9, t: 'door' }, { a: 2.5, b: 3.3, t: 'window' }, { a: 4.1, b: 5.0, t: 'door' }, { a: 5.5, b: 6.4, t: 'window' }, { a: 7.4, b: 8.3, t: 'door' }, { a: 9.6, b: 12.2, t: 'glass' }]);
-    // Varanda (parede externa com aberturas para a piscina)
-    wallX(6.2, 0, 12.5, [{ a: 2.9, b: 3.8, t: 'door' }, { a: 4.6, b: 6.6, t: 'window' }, { a: 8.0, b: 12.0, t: 'glass' }]);
+    wallX(4.2, 0, 12.5, [{ a: 2.5, b: 3.3, t: 'window' }, { a: 5.5, b: 6.4, t: 'window' }, { a: 9.6, b: 12.2, t: 'glass' }]);   // 22/11: removido a pedido do João: as 3 portas para o corredor (x 1,0-1,9 · 4,1-5,0 · 7,4-8,3) não existem; viram parede
+    // 22/11: removido a pedido do João: a parede z=6,2 (janela, vidro, porta e trecho cego) NÃO existe; a faixa z 4,2-6,2 é área externa aberta. Fica só o trecho x 0-2,4, que é a parede norte do banheiro.
+    wallX(6.2, 0, 2.4);
     // Ala esquerda: banheiro, dispensa
     wallZ(2.4, 6.2, 10.6, [{ a: 7.0, b: 7.9, t: 'door' }, { a: 9.3, b: 10.1, t: 'door' }]);
     wallX(8.8, 0, 2.4);
@@ -3926,6 +3983,7 @@ export class Casa3DCard extends HTMLElement {
     const put = (len, hh, thick, m, mid, y, opts) => {
       const mesh = axis === 'x' ? box(len, hh, thick, m, mid, y, c, opts) : box(thick, hh, len, m, c, y, mid, opts);
       mesh.userData.arch = true;   // arquitetura: não conta como móvel no giro das portas
+      (this._archMats || (this._archMats = new Set())).add(m);   // materiais das paredes: ganham o corte da vista de cômodo (_camCut)
       scene.add(mesh); return mesh;
     };
     const seg = (a, b, y0, y1, m) => {
@@ -3966,8 +4024,10 @@ export class Casa3DCard extends HTMLElement {
         seg(o.a, o.b, 2.25, h, mat); frame(o.a, o.b, 0, 2.25);
         for (let y = 0.2; y < 2.15; y += 0.24) put(o.b - o.a - 0.12, 0.14, 0.04, M.steel, (o.a + o.b) / 2, y + 0.07, { cast: false });
       } else if (o.t === 'window') {
+        (this._openings || (this._openings = [])).push({ axis, c, a: o.a, b: o.b });   // janela/vidro: a vista de cômodo prefere o lado que tem
         seg(o.a, o.b, 0, 1.0, mat); seg(o.a, o.b, 2.15, h, mat); frame(o.a, o.b, 1.0, 2.15); pane(o.a, o.b, 1.0, 2.15); mullion(o.a, o.b, 1.0, 2.15);
       } else if (o.t === 'glass') {
+        (this._openings || (this._openings = [])).push({ axis, c, a: o.a, b: o.b });
         seg(o.a, o.b, 2.25, h, mat); frame(o.a, o.b, 0, 2.25); pane(o.a, o.b, 0, 2.25);
         const n = Math.max(maq ? 2 : 1, Math.round((o.b - o.a) / (maq ? 1.3 : 1.0))); for (let i = 1; i < n; i++) mullion(o.a + ((o.b - o.a) * i) / n - 0.02, o.a + ((o.b - o.a) * i) / n + 0.02, 0, 2.25);
         if (maq) {   // portas de correr: trilho preto no piso, puxadores finos nas emendas e folhas alternadas (leve defasagem)
@@ -3975,6 +4035,8 @@ export class Casa3DCard extends HTMLElement {
           for (let i = 1; i < n; i++) { const x = o.a + ((o.b - o.a) * i) / n; put(0.012, 0.34, T + 0.06, M.frame, x + (i % 2 ? 0.05 : -0.05), 1.05, { cast: false }); }
           for (let i = 0; i < n; i++) { const x0 = o.a + ((o.b - o.a) * i) / n, x1 = o.a + ((o.b - o.a) * (i + 1)) / n, off = i % 2 ? 0.02 : -0.02; mesh_off(put(x1 - x0 - 0.04, 0.02, 0.012, M.frame, (x0 + x1) / 2, 2.1, { cast: false }), axis, off); }
         }
+      } else if (o.t === 'gap') {
+        // vao totalmente aberto (sem verga)
       } else if (o.t === 'open') {
         seg(o.a, o.b, Math.min(h - 0.35, 2.3), h, mat);
       }
@@ -4282,7 +4344,7 @@ export class Casa3DCard extends HTMLElement {
 
   // Posição inicial da câmera: em telas estreitas (retrato) afasta para caber o lote inteiro
   _homeFor(aspect) {
-    const target = new THREE.Vector3(6.7, 0, 8.6);
+    const target = new THREE.Vector3(LOT.w / 2, 1.0, LOT.d / 2);   // centro fixo da órbita: centro do lote/laje, a ~1 m do piso
     const dir = new THREE.Vector3(1.8, 17.5, 14.3).normalize();
     const k = aspect >= 1.25 ? 1 : Math.pow(1.25 / Math.max(aspect, 0.3), 0.8);
     return { pos: target.clone().addScaledVector(dir, 22.7 * k * (this._maq ? (aspect >= 1.25 ? 1.2 : 1.04) : 1)), target };   // maquete: um pouco mais longe (a laje inteira cabe em qualquer ângulo do giro)
@@ -4298,6 +4360,7 @@ export class Casa3DCard extends HTMLElement {
   _resetView(fly = false) {
     const n = this._nav, rects = n.room ? n.room.rects : n.block ? n.block.rooms.flatMap((r) => r.rects) : [[0, 0, LOT.w, LOT.d]];
     this._home = this._topView ? this._frameRect(...this._roomBox({ rects }), n.block ? 0.035 : 0.5) : this._homeFor(this._camera.aspect);
+    if (!this._topView) this._orbit.lockAt = this._home.target.clone();   // vista geral: a órbita gira sempre em volta deste ponto
     if (fly) this._flyCam(this._home.pos, this._home.target, 3.2); else this._orbit.reset(this._home.pos, this._home.target);
     this._orbit.touched = false;
   }
@@ -4922,6 +4985,7 @@ export class Casa3DCard extends HTMLElement {
   }
   _setWalk(on) {
     on = !!on; if (on === !!this._walkOn || !this._orbit) return;
+    if (on) this._camExit();
     const was = on && { room: this._room, nav: { ...this._nav }, snap: this._dock.dataset.snap };   // cômodo, nível da planta e altura da folha de antes: voltam ao sair
     this._showRoom(null); if (on) this._dicaOff();
     const o = this._orbit, cam = this._camera, cv = this._canvas;
@@ -4969,7 +5033,7 @@ export class Casa3DCard extends HTMLElement {
   // ---- Vista de cima navegável (v1.6): planta inteira (inclinada, vista do quintal) → área de PLACES → cômodo (reto de cima) ----
   // Sem telhado (volta como estava ao sair). O painel lateral fica como está; no nível cômodo ele mostra o cômodo (v1.6.1).
   _setTopView(on, keepCamera = false) {
-    on = !!on;
+    on = !!on; if (on) this._camExit();
     if (on && this._walkOn) this._setWalk(false);
     const was = this._topView;
     if (on && !was) this._topSaved = { roof: !!this._roofOn };
@@ -5080,6 +5144,11 @@ export class Casa3DCard extends HTMLElement {
   _onClick(e) {
     const hit = this._pickHit(e);
     this._hoverCardHide();
+    if (this._camMode) {   // vista de cômodo: tocar num aparelho do cômodo liga/desliga; o resto não muda nada (a vista só sai pelo botão)
+      const o = hit && hit.object, k = o && !o.userData.zone && o.userData.item;
+      if (k && this._camRoom && this._mpDevices(this._camRoom).some((d) => d.key === k)) { this._toggleItem(k); this._camRender(); this._maqEmit(); }
+      return;
+    }
     if (this._topView && this._topClick(e, hit)) return;
     if (this._walkOn && (this._doorClick(hit) || this._walkClick(e, hit))) return this._select(null);   // folha da porta abre/fecha · piso/parede: caminha até lá
     // tocar abre o cômodo (o do aparelho, com o bloco dele destacado) no painel lateral; vazio volta à visão geral. Aparelho (v1.8.1, como a
@@ -5096,6 +5165,7 @@ export class Casa3DCard extends HTMLElement {
   // Noite: ao tocar num cômodo a câmera aproxima e gira suave até ele (o painel abre pelo _showRoom); ao voltar à visão geral, ela volta ao quadro de casa
   _focusRoom(r) {
     if (!r || !this._orbit || this._topView || this._walkOn || r === this._focused) return;
+    if (this._config && this._config.static_view) { this._orbit.touched = true; return; }   // vista estatica: so seleciona, a camera nao voa nem da zoom
     const b = this._roomBox(r), cx = (b[0] + b[2]) / 2, cz = (b[1] + b[3]) / 2, size = Math.max(b[2] - b[0], b[3] - b[1]);
     const target = new THREE.Vector3(cx, 0.6, cz), cam = this._camera.position;
     const dir = new THREE.Vector3(cam.x - cx, 0, cam.z - cz); if (dir.lengthSq() < 1e-4) dir.set(0.1, 0, 1); dir.normalize();
@@ -5103,12 +5173,184 @@ export class Casa3DCard extends HTMLElement {
     const pos = target.clone().addScaledVector(dir, dist * 0.62); pos.y = dist * 0.78;
     this._focused = r; this._flyCam(pos, target, 2.4); this._orbit.touched = true;   // touched: o reenquadre do painel não leva a câmera de volta ao home
   }
+  // ---------------------------------------------------------------------------
+  // Órbita fixa + vista de cômodo ("câmera"): drone parado do lado de fora, olhando o cômodo em diagonal
+  // ---------------------------------------------------------------------------
+  // alvo da órbita FIXO: na vista geral (static_view) e na vista de cômodo; livre na Vista de cima e na Pessoa
+  _orbitLocked() { return !this._walkOn && !this._topView && (!!this._camMode || !!(this._config && this._config.static_view)); }
+  // prepara a cena: (1) as paredes ganham 6 planos de corte (caixa, hoje vazia e longe) e (2) todos os materiais ganham o escurecimento
+  // fora da caixa do cômodo (uniforms compartilhados) — as malhas estáticas já foram fundidas, então o recorte é por região, não por malha
+  _camPrep() {
+    const far = 1e5;
+    this._cutPlanes = [new THREE.Plane(new THREE.Vector3(1, 0, 0), far), new THREE.Plane(new THREE.Vector3(-1, 0, 0), far), new THREE.Plane(new THREE.Vector3(0, 1, 0), far),
+      new THREE.Plane(new THREE.Vector3(0, -1, 0), far), new THREE.Plane(new THREE.Vector3(0, 0, 1), far), new THREE.Plane(new THREE.Vector3(0, 0, -1), far)];
+    for (const m of this._archMats || []) { m.clippingPlanes = this._cutPlanes; m.clipIntersection = true; m.clipShadows = true; }   // interseção: corta só o que está dentro da caixa
+    const U = this._camU = { uCb: { value: new THREE.Vector4(0, 0, 0, 0) }, uCbK: { value: 0 }, uCut: { value: new THREE.Vector4(-1e5, -1e5, -1e5, -1e5) }, uCutHi: { value: new THREE.Vector4(-1e5, -1e5, -1e5, -1e5) } }, seen = new Set();
+    const patch = (m) => {
+      if (!m || seen.has(m)) return; seen.add(m);
+      if (!(m.isMeshStandardMaterial || m.isMeshBasicMaterial || m.isMeshPhongMaterial || m.isMeshLambertMaterial)) return;
+      const prev = m.onBeforeCompile, key = Object.prototype.hasOwnProperty.call(m, 'customProgramCacheKey') ? m.customProgramCacheKey.call(m) : prev ? prev.toString() : '';
+      m.onBeforeCompile = function (sh, r) {
+        if (prev) prev.call(this, sh, r);
+        sh.uniforms.uCb = U.uCb; sh.uniforms.uCbK = U.uCbK; sh.uniforms.uCut = U.uCut; sh.uniforms.uCutHi = U.uCutHi;
+        sh.vertexShader = sh.vertexShader.replace('#include <common>', '#include <common>\nvarying vec3 vCbW;')
+          .replace('#include <begin_vertex>', '#include <begin_vertex>\n#ifdef USE_INSTANCING\nvCbW = (modelMatrix * instanceMatrix * vec4(transformed, 1.0)).xyz;\n#else\nvCbW = (modelMatrix * vec4(transformed, 1.0)).xyz;\n#endif');
+        sh.fragmentShader = sh.fragmentShader.replace('#include <common>', '#include <common>\nvarying vec3 vCbW;\nuniform vec4 uCb;\nuniform float uCbK;\nuniform vec4 uCut;\nuniform vec4 uCutHi;')
+          .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>\nif (vCbW.y > 0.14 && vCbW.x >= uCut.x && vCbW.z >= uCut.y && vCbW.x <= uCut.z && vCbW.z <= uCut.w) discard;\nif (vCbW.y > 1.95 && vCbW.x >= uCutHi.x && vCbW.z >= uCutHi.y && vCbW.x <= uCutHi.z && vCbW.z <= uCutHi.w) discard;')
+          .replace('#include <dithering_fragment>', '#include <dithering_fragment>\n{ bool inb = vCbW.x >= uCb.x && vCbW.z >= uCb.y && vCbW.x <= uCb.z && vCbW.z <= uCb.w; gl_FragColor.rgb *= inb ? 1.0 : mix(1.0, 0.28, uCbK); }');
+      };
+      m.customProgramCacheKey = () => key + '|camdim';
+    };
+    this._scene.traverse((o) => { if (o.isMesh) (Array.isArray(o.material) ? o.material : [o.material]).forEach(patch); });
+  }
+  // abre (b = [x0, z0, x1, z1] do cômodo + lado) ou fecha o corte da parede entre a câmera e o cômodo
+  _camCut(side, b) {
+    const P = this._cutPlanes; if (!P) return;
+    let box = null;
+    for (const o of this._camHid || []) { if (o.attr) { o.attr.array.set(o.data, o.s * 3); o.attr.needsUpdate = true; } else o.visible = true; }   // cortinas escondidas na vista anterior voltam
+    this._camHid = [];
+    if (side) {
+      const h = T / 2 + 0.14, nz = side.n[1];
+      let a0 = (nz ? b[0] : b[1]) + T / 2, a1 = (nz ? b[2] : b[3]) - T / 2;
+      for (const o of this._openings || []) if ((o.axis === 'x') === !!nz && Math.abs(o.c - side.c) < 0.2 && o.b > a0 && o.a < a1) { a0 = Math.min(a0, o.a - 0.06); a1 = Math.max(a1, o.b + 0.06); }   // vidro/janela que passa do cômodo sai inteiro (sem caixilho cortado no meio da vista)
+      box = nz ? [a0, -0.5, side.c - h, a1, H + 0.6, side.c + h] : [side.c - h, -0.5, a0, side.c + h, H + 0.6, a1];
+      // cortinas, varões e quadros colados na parede cortada (do lado de dentro) somem junto: ficariam em pé na frente do cômodo
+      const n = nz ? side.n[1] : side.n[0], bb = new THREE.Box3();
+      const hit = (bb) => {
+        const lo = nz ? bb.min.z : bb.min.x, hi = nz ? bb.max.z : bb.max.x, s0 = nz ? bb.min.x : bb.min.z, s1 = nz ? bb.max.x : bb.max.z;
+        const inner = n > 0 ? lo >= side.c - 0.45 && hi <= side.c + 0.02 : hi <= side.c + 0.45 && lo >= side.c - 0.02;
+        return inner && hi - lo <= 0.18 && s1 > a0 && s0 < a1 && ((bb.max.y - bb.min.y >= 0.4 && bb.max.y > 1.2) || bb.min.y > 1.9);   // em pé (cortina) ou no alto (varão, bandô)
+      };
+      this._scene.traverse((o) => {
+        if (!o.isMesh || o.isInstancedMesh || !o.visible || !o.geometry || o.userData.arch || o.userData.item || o.userData.zone || (this._archMats && this._archMats.has(o.material))) return;
+        const parts = o.geometry.camParts;
+        if (!parts) { if (hit(bb.setFromObject(o))) { o.visible = false; this._camHid.push(o); } return; }
+        const attr = o.geometry.attributes.position, A = attr.array;   // malha fundida: as peças que batem viram um ponto (sem área) e voltam ao sair
+        for (const [s, c, pb] of parts) if (hit(pb)) { this._camHid.push({ attr, s, data: A.slice(s * 3, (s + c) * 3) }); for (let i = s + 1; i < s + c; i++) { A[i * 3] = A[s * 3]; A[i * 3 + 1] = A[s * 3 + 1]; A[i * 3 + 2] = A[s * 3 + 2]; } attr.needsUpdate = true; }
+      });
+    }
+    const [x0, y0, z0, x1, y1, z1] = box || [1e5, 1e5, 1e5, 1e5 + 1, 1e5 + 1, 1e5 + 1];
+    P[0].constant = -x1; P[1].constant = x0; P[2].constant = -y1; P[3].constant = y0; P[4].constant = -z1; P[5].constant = z0;
+    if (this._camU) this._camCutArea(side, b, box);
+    if (this._camU) this._camU.uCb.value.set(b ? b[0] - 0.12 : 0, b ? b[1] - 0.12 : 0, b ? b[2] + 0.12 : 0, b ? b[3] + 0.12 : 0);
+    this._needShadow = true; if (this._orbit) this._orbit.dirty = true;
+  }
+  // a área de fora entre a câmera e a parede (móveis da varanda, churrasqueira...) some acima do piso: nada na frente do cômodo
+  // + uma faixa alta (y > 1,95) logo dentro da parede cortada: varões e bandôs fundidos com outras peças (não dá para esconder a malha) não riscam a vista
+  _camCutArea(side, b, box) {
+    const v = this._camU.uCut.value, hi = this._camU.uCutHi.value; hi.set(-1e5, -1e5, -1e5, -1e5); if (!side) return v.set(-1e5, -1e5, -1e5, -1e5);
+    const o = T / 2 + 0.03, L = 2.6, nx = side.n[0], nz = side.n[1], D = T / 2 + 0.4;
+    if (nz) { const z0 = nz > 0 ? side.c + o : side.c - o - L; v.set(b[0] + T / 2, z0, b[2] - T / 2, z0 + L); hi.set(box[0], nz > 0 ? side.c - D : side.c, box[3], nz > 0 ? side.c : side.c + D); }
+    else { const x0 = nx > 0 ? side.c + o : side.c - o - L; v.set(x0, b[1] + T / 2, x0 + L, b[3] - T / 2); hi.set(nx > 0 ? side.c - D : side.c, box[2], nx > 0 ? side.c : side.c + D, box[5]); }
+  }
+  // lado externo mais próximo da janela/vidro: pontua abertura no lado (+1,2), a frente da casa (+z, até 0,8) e penaliza o lado que dá para outro cômodo da mesma área
+  _camSide(r, b) {
+    const rooms = this._roomsAll(), op = this._openings || [], best = { s: -1e9 };
+    const sides = [{ n: [0, 1], c: b[3], a: [b[0], b[2]] }, { n: [0, -1], c: b[1], a: [b[0], b[2]] }, { n: [1, 0], c: b[2], a: [b[1], b[3]] }, { n: [-1, 0], c: b[0], a: [b[1], b[3]] }];
+    for (const sd of sides) {
+      const zs = !!sd.n[1], mid = (sd.a[0] + sd.a[1]) / 2, px = zs ? mid : sd.c + sd.n[0] * 1.6, pz = zs ? sd.c + sd.n[1] * 1.6 : mid;
+      const nb = rooms.find((q) => q !== r && q.rects.some(([rx, rz, w, d]) => px >= rx && px <= rx + w && pz >= rz && pz <= rz + d));
+      const has = op.some((o) => (o.axis === 'x') === zs && Math.abs(o.c - sd.c) < 0.2 && o.b > sd.a[0] && o.a < sd.a[1]);
+      sd.s = (has ? 1.2 : 0) + sd.n[1] * 0.8 - (nb && nb.block === r.block ? 5 : 0);
+      if (sd.s > best.s) Object.assign(best, sd);
+    }
+    return best;
+  }
+  // pose da câmera: do lado externo, ~30° acima, girada ~10° do eixo da parede; a distância é a que faz a caixa do cômodo caber no quadro livre
+  _camPose(r) {
+    const b = this._roomBox(r), cx = (b[0] + b[2]) / 2, cz = (b[1] + b[3]) / 2, sd = this._camSide(r, b), nx = sd.n[0], nz = sd.n[1];
+    const target = new THREE.Vector3(cx, 0.9, cz);
+    let tx = -nz, tz = nx; if (tx < 0 || (tx === 0 && tz < 0)) { tx = -tx; tz = -tz; }
+    const psi = 0.18, el = 0.52, hx = nx * Math.cos(psi) + tx * Math.sin(psi), hz = nz * Math.cos(psi) + tz * Math.sin(psi);
+    const dir = new THREE.Vector3(hx * Math.cos(el), Math.sin(el), hz * Math.cos(el)).normalize();
+    const w = this.clientWidth || 800, h = Math.max(160, (this.clientHeight || 600) - (this._camB || 0) - (this._camT || 0)), tanV = Math.tan(this._camera.fov * Math.PI / 360) * 0.82, tanH = tanV * (w / h);
+    const f = dir.clone().negate(), right = new THREE.Vector3().crossVectors(f, new THREE.Vector3(0, 1, 0)).normalize(), upv = new THREE.Vector3().crossVectors(right, f).normalize(), p = new THREE.Vector3();
+    let D = 0;
+    for (const x of [b[0], b[2]]) for (const z of [b[1], b[3]]) for (const y of [0, H]) {
+      p.set(x, y, z).sub(target); const k = p.dot(dir);
+      D = Math.max(D, k + Math.abs(p.dot(right)) / tanH, k + Math.abs(p.dot(upv)) / tanV);
+    }
+    const half = nz ? (b[3] - b[1]) / 2 : (b[2] - b[0]) / 2;
+    D = Math.max(D, (half + 1.1) / (Math.cos(el) * Math.cos(psi)));   // sempre do lado de fora da parede
+    return { pos: target.clone().addScaledVector(dir, D), target, D, el, side: sd, box: b };
+  }
+  _camEnter(r) {
+    if (!r || !this._orbit || this._walkOn || this._topView) return;
+    const o = this._orbit;
+    if (!this._camMode) this._camSaved = { min: o.minDist, max: o.maxDist, pmin: o.minPolar, pmax: o.maxPolar, roof: !!(this._roof && this._roof.visible) };
+    this._camRoom = r; this._focused = null;
+    this._showRoom(null); this._select(null); this._hoverCardHide();
+    if (this._roof && this._roof.visible) this._roof.visible = false;   // o telhado esconderia o cômodo
+    this._camMode = true; o.touched = true; o.vel = 0;
+    const hud = this._camHud; this._camRender(true); hud.hidden = false;
+    this._camB = (this._camBar.offsetHeight || 80) + (parseFloat(getComputedStyle(this._camBar).bottom) || 14) + 10;
+    const ct = hud.querySelector('.cht'); this._camT = (this.clientWidth || 800) < 700 && ct ? ct.offsetTop + ct.offsetHeight + 6 : 0;   // celular: o cômodo começa abaixo do título (no desktop o título fica ao lado)
+    this._resize();
+    const ps = this._camPose(r); this._camP = ps;
+    o.lockAt = ps.target.clone(); o.thetaLim = null; o.minDist = ps.D * 0.82; o.maxDist = ps.D * 1.22;
+    o.minPolar = Math.max(0.2, Math.PI / 2 - ps.el - 0.2); o.maxPolar = Math.min(1.45, Math.PI / 2 - ps.el + 0.2);
+    this._camCut(ps.side, ps.box);
+    this._flyCam(ps.pos, ps.target, 2.6);
+    const g = o.goal.theta; o.thetaLim = [g - 0.4, g + 0.4];   // gira só um pouco em volta do cômodo
+    requestAnimationFrame(() => { hud.classList.add('on'); try { this._camBack.focus({ preventScroll: true }); } catch (_) {} });
+    this._maqEmit();
+  }
+  _camExit() {
+    if (!this._camMode) return;
+    const o = this._orbit, sv = this._camSaved || {}, hud = this._camHud;
+    this._camMode = false; this._camRoom = null; this._camP = null; this._camB = 0; this._camT = 0;
+    hud.classList.remove('on'); hud.hidden = true;
+    o.thetaLim = null; o.minDist = sv.min != null ? sv.min : 9; o.maxDist = sv.max != null ? sv.max : 64; o.minPolar = sv.pmin != null ? sv.pmin : 0.03; o.maxPolar = sv.pmax != null ? sv.pmax : 1.45;
+    if (sv.roof && this._roof) this._roof.visible = true;
+    this._camCut(null, null);
+    this._resize(); o.touched = false; this._resetView(true);
+    try { this._canvas.focus({ preventScroll: true }); } catch (_) {}
+    this._maqEmit();
+  }
+  _camKey(e) {
+    if (e.ctrlKey || e.metaKey || e.altKey) return false;
+    if (this._camMode) { if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); this._camExit(); return true; } return false; }
+    if ((e.key === 'v' || e.key === 'V') && this._room && !this._topView && !this._walkOn) { e.preventDefault(); this._camEnter(this._room); return true; }
+    return false;
+  }
+  _camHudBuild(wrap) {
+    const hud = document.createElement('div'); hud.className = 'camhud'; hud.hidden = true; hud.setAttribute('role', 'region'); hud.setAttribute('aria-label', 'Vista da câmera do cômodo');
+    hud.innerHTML = '<div class="cht"><button type="button" class="chb">' + iconSvg('chevl') + '<span>Voltar à casa</span></button><div class="chn"><small>Vista da câmera</small><b></b></div></div>'
+      + '<div class="chbar"><div class="chdev" role="group" aria-label="Aparelhos do cômodo"></div><button type="button" class="chall"></button></div>';
+    this._camHud = hud; this._camBack = hud.querySelector('.chb'); this._camBar = hud.querySelector('.chbar'); this._camDev = hud.querySelector('.chdev'); this._camAll = hud.querySelector('.chall'); this._camTitle = hud.querySelector('.chn b');
+    this._camBack.addEventListener('click', () => this._camExit());
+    this._camAll.addEventListener('click', () => { const r = this._camRoom; if (!r) return; const ds = this._mpDevices(r), allOn = ds.every((d) => this._state[d.key] && this._state[d.key].on); for (const d of ds) this._setItem(d.key, !allOn); this._camRender(); this._maqEmit(); });
+    hud.addEventListener('keydown', (e) => this._camKey(e));
+    wrap.appendChild(hud);
+  }
+  _camRender(force) {
+    const r = this._camRoom, D = this._camDev; if (!r || !D) return;
+    const ds = this._mpDevices(r), st = (k) => this._state[k] || {}, sig = r.id + '|' + ds.map((d) => d.key).join();
+    if (force || this._camSig !== sig) {
+      this._camSig = sig; this._camTitle.textContent = r.label; D.replaceChildren(); this._camBtns = {};
+      if (!ds.length) { const e = document.createElement('span'); e.className = 'chnone'; e.textContent = 'Este cômodo não tem aparelhos para ligar ou desligar.'; D.appendChild(e); }
+      for (const d of ds) {
+        const b = document.createElement('button'); b.type = 'button'; b.className = 'chip'; b.setAttribute('role', 'switch');
+        b.innerHTML = '<span class="ic">' + iconSvg(d.icon) + '</span><span class="tx"><b></b><em></em></span><span class="sw"></span>';
+        b.querySelector('b').textContent = d.kind === 'light' && d.short === 'Luz' ? (d.label === r.label ? 'Luz principal' : 'Luz ' + d.label) : d.label;
+        b.addEventListener('click', () => { this._toggleItem(d.key); this._camRender(); this._maqEmit(); });
+        D.appendChild(b); this._camBtns[d.key] = b;
+      }
+    }
+    for (const d of ds) {
+      const b = this._camBtns[d.key]; if (!b) continue; const s = st(d.key), on = !!s.on;
+      b.classList.toggle('on', on); b.setAttribute('aria-checked', on ? 'true' : 'false');
+      b.querySelector('em').textContent = d.kind === 'light' || d.kind === 'switch' ? (s.unavailable ? 'indisponível' : on ? 'ligado' : 'desligado') : ((s.text || '').split(' · ').slice(0, 2).join(' · ') || (on ? 'ligado' : 'desligado'));
+    }
+    const allOn = ds.length > 0 && ds.every((d) => st(d.key).on);
+    this._camAll.textContent = allOn ? 'Desligar tudo' : 'Ligar tudo'; this._camAll.hidden = !ds.length;
+  }
   _unfocus() {
     this._focused = null;
     if (this._orbit && !this._topView && !this._walkOn) { this._orbit.touched = false; this._resetView(true); }
   }
   // auto-rotação da vista geral: só com a cena parada, sem cômodo/painel, fora da Pessoa e da Vista de cima, e sem reduced-motion
-  _autoOrbitOk() { return !this._reduced && !this._room && !this._focused && !this._walkOn && !this._topView && !document.hidden; }
+  _autoOrbitOk() { return !(this._config && this._config.static_view) && !this._reduced && !this._room && !this._focused && !this._walkOn && !this._topView && !document.hidden; }
   _select(sel) {
     const b = this._selEl; if (!b) return;
     if (!sel && b.contains(this.shadowRoot.activeElement)) this._canvas.focus({ preventScroll: true });   // o foco no botão do balão volta à maquete
@@ -5209,7 +5451,7 @@ export class Casa3DCard extends HTMLElement {
   static get MAQ_TEXT() {
     return { quarto_casal: 'Suíte ao fundo da casa, com janela para o terreno e porta para a varanda.', quarto: 'Quarto com TV na parede, luz principal e fita de LED em tom quente.',
       sala: 'Sala integrada à cozinha, com ar-condicionado e porta para a varanda.', balcao: 'Cozinha aberta para a sala, com janela ao fundo e vidro de correr para a varanda.',
-      varanda: 'Varanda coberta, aberta para o deck e a piscina.', piscina: 'Deck de madeira em volta da piscina, com luz subaquática e bomba de filtragem.',
+      varanda: 'Área externa aberta, com o mesmo piso do deck, até a piscina.', piscina: 'Deck de madeira em volta da piscina, com luz subaquática e bomba de filtragem.',
       jardim: 'Jardim lateral, com arandelas acesas no muro.', quintal: 'Pátio da frente, com portão para a rua.', banheiro: 'Banheiro com box de vidro e luz própria.',
       dispensa: 'Dispensa ao lado do banheiro.', garagem: 'Garagem com o carro e portão para a rua.' };
   }
@@ -5218,11 +5460,14 @@ export class Casa3DCard extends HTMLElement {
     const mp = document.createElement('aside'); mp.className = 'mpan'; mp.setAttribute('aria-label', 'Cômodo'); mp.setAttribute('aria-hidden', 'true'); mp.inert = true;
     mp.innerHTML = '<div class="mp1"><span class="mpe">Cômodo</span><span class="mpill"><i></i><em></em></span></div><h2></h2>'
       + '<div class="mpn"><div><b class="n1"></b><small>aparelhos</small></div><div><b class="n2"></b><small>ligados</small></div><div><b class="n3"></b><small>temperatura</small></div></div>'
-      + '<div class="mph"></div><p></p><ol></ol><div class="mpb"><button type="button" class="b1"></button><button type="button" class="b2">Voltar à casa</button></div>';
+      + '<div class="mph"></div><p></p><ol></ol><div class="mpb"><button type="button" class="b3">' + CAM_ICON + '<span>Vista da câmera</span><kbd>V</kbd></button><button type="button" class="b1"></button><button type="button" class="b2">Voltar à casa</button></div>';
     const q = (s) => mp.querySelector(s);
     this._mp = mp; this._mpQ = { eye: q('.mpe'), pill: q('.mpill'), pt: q('.mpill em'), h: q('h2'), n1: q('.n1'), n2: q('.n2'), n3: q('.n3'), hl: q('.mph'), p: q('p'), ol: q('ol'), all: q('.b1') };
     this._mpQ.all.addEventListener('click', () => { const r = this._room; if (!r) return; const ds = this._mpDevices(r), allOn = ds.length && ds.every((d) => this._state[d.key] && this._state[d.key].on); for (const d of ds) this._setItem(d.key, !allOn); this._maqEmit(); });
     q('.b2').addEventListener('click', () => this._showRoom(null));
+    q('.b3').addEventListener('click', () => this._camEnter(this._room));
+    mp.addEventListener('keydown', (e) => this._camKey(e));
+    this._camHudBuild(wrap);
     wrap.appendChild(mp);
     // pontinhos brancos nos cômodos (abrem o cômodo; o hover mostra o cartão e acende a luz)
     const hs = document.createElement('div'); hs.className = 'hots'; wrap.appendChild(hs); this._hots = hs; this._hotList = [];
@@ -5242,7 +5487,7 @@ export class Casa3DCard extends HTMLElement {
   }
   _hotPlace() {
     if (!this._hotList || !this._hotList.length) return;
-    const w = this.clientWidth, h = this.clientHeight, hide = this._walkOn || this._topView; this._hots.hidden = !!hide; if (hide) return;
+    const w = this.clientWidth, h = this.clientHeight, hide = this._walkOn || this._topView || this._camMode; this._hots.hidden = !!hide; if (hide) return;
     this._camera.updateMatrixWorld(); const v = this._hv || (this._hv = new THREE.Vector3());
     for (const o of this._hotList) {
       v.copy(o.v).project(this._camera);
@@ -5304,13 +5549,20 @@ export class Casa3DCard extends HTMLElement {
     const self = this, cbs = new Set();
     this._maqCbs = cbs;
     const find = (id) => self._roomsAll().find((r) => r.id === id || r.label === id) || null;
-    const dev = (it) => { const s = self._state[it.key] || {}; return { key: it.key, label: it.label, kind: it.kind, on: !!s.on, text: s.text || '' }; };
+    const dev = (it) => { const s = self._state[it.key] || {}; const a = s.attrs || {}; return { key: it.key, label: it.label, short: it.short || it.label, icon: it.icon, kind: it.kind, on: !!s.on, text: s.text || '', temp: it.kind === 'climate' && a.temperature != null ? a.temperature : null }; };
     return {
       rooms() { return self._roomsAll().map((r) => ({ id: r.id, label: r.label, block: r.block.id, devices: self._mpDevices(r).map(dev) })); },
       toggle(room, device) {
         const r = typeof room === 'string' ? find(room) : room, k = device && device.key || device;
         if (!r || !self._mpDevices(r).some((d) => d.key === k)) return false;
         self._toggleItem(k); return true;
+      },
+      // ajusta a temperatura do ar-condicionado em passos (delta = +1 / -1); devolve a nova temperatura ou null
+      adjust(room, device, delta) {
+        const r = typeof room === 'string' ? find(room) : room, k = device && device.key || device;
+        if (!r || !self._mpDevices(r).some((d) => d.key === k && d.kind === 'climate')) return null;
+        const a = (self._state[k] && self._state[k].attrs) || {}, cur = a.temperature != null ? a.temperature : 23, tt = clamp(cur + delta, a.min_temp || 16, a.max_temp || 31);
+        self._svc('climate', 'set_temperature', self.entity(k), { temperature: tt }); return tt;
       },
       state() {
         const devices = {}; for (const it of ITEMS) if (it.kind !== 'sensor') devices[it.key] = !!(self._state[it.key] && self._state[it.key].on);
@@ -5325,6 +5577,7 @@ export class Casa3DCard extends HTMLElement {
     };
   }
   _maqEmit() {
+    if (this._camMode) this._camRender();
     if (!this._maqCbs || !this._maqCbs.size || this._emitQ) return;
     this._emitQ = true; Promise.resolve().then(() => { this._emitQ = false; const s = this.casa3d.state(); for (const cb of [...this._maqCbs]) { try { cb(s); } catch (_) {} } });
   }
@@ -5338,6 +5591,7 @@ export class Casa3DCard extends HTMLElement {
   }
   _onHover(e) {
     if (e.pointerType && e.pointerType !== 'mouse') return;
+    if (this._camMode) return this._hoverCardHide();
     if (this._orbit) this._orbit.userAt = performance.now();   // mouse sobre a cena: a auto-rotação espera (o cômodo não foge do cartão)
     if (this._topView && this._nav.level < 2) {   // planta: realça a área · área: o cômodo sob o mouse
       const r = this._topRoom(e), b = r && (this._nav.level === 0 || r.block !== this._nav.block) ? r.block : null;
@@ -5995,7 +6249,7 @@ export class Casa3DCard extends HTMLElement {
     const open = this._panelOpen && this._dock && !this._dock.hidden;
     if (open && this._sheet && !this._sprRaf && !this._dragging && this._dock.dataset.snap) this._sideX(this._snaps()[this._dock.dataset.snap]);   // conteúdo mudou de altura: fica no mesmo detente
     let P = open && !this._sideOverlay ? this._sideW + 20 : 0, B = open && this._sheet ? Math.max(0, this._wrap.clientHeight - this._dock.offsetTop - (this._sprRaf ? this._sprGoal() : this._sprX || 0)) : 0, T = B ? this._hudH || 0 : 0;
-    if (this._maq) { const bot = w < 700; P = this._mpOpen && !bot ? -((this._mpW || 316) + 28) : 0; B = this._mpOpen && bot ? (this._mpH || 0) : 0; T = 0; }   // maquete: painel à direita (desktop) ou folha embaixo (celular); P negativo = faixa livre à direita
+    if (this._maq) { const bot = w < 700; P = this._mpOpen && !bot ? -((this._mpW || 316) + 28) : 0; B = this._mpOpen && bot ? (this._mpH || 0) : 0; T = 0; if (this._camMode) { P = 0; B = this._camB || 0; T = this._camT || 0; } }   // maquete: painel à direita (desktop) ou folha embaixo (celular); P negativo = faixa livre à direita
     const fz = this._selBand; if (!this._maq && fz && fz[3] === w && fz[4] === h) [P, B, T] = fz;   // balão aberto: o painel mudou de conteúdo, a cena fica onde o dedo está
     const p0 = this._pNow, vh = Math.max(160, h - B - T); this._vb = [B, T, w, h]; this._viewP(P);   // já na faixa final: o _resetView enquadra por ela
     const u = 2 * Math.tan(this._camera.fov * Math.PI / 360) / vh;   // rótulos (sem perspectiva): px de tela → escala
@@ -6128,6 +6382,7 @@ export class Casa3DCard extends HTMLElement {
     const dt = Math.min(this._clock.getDelta(), 0.1);
     const t = this._clock.elapsedTime;
     let dirty = this._walkOn ? this._walk.update(dt) : this._orbit.update(dt);
+    if (this._camU) { const g = this._camMode ? 1 : 0, v = this._camU.uCbK.value; if (Math.abs(g - v) > 0.003) { this._camU.uCbK.value = v + (g - v) * (1 - Math.exp(-dt * 5)); dirty = true; } else if (v !== g) { this._camU.uCbK.value = g; dirty = true; } }   // escurece/clareia o resto da casa
     if (this._pA) { const a = this._pA, k = Math.min(1, (a[2] += dt) / 0.25); this._viewP(a[0] + (a[1] - a[0]) * (1 - (1 - k) ** 3)); if (k === 1) this._pA = null; dirty = true; }   // faixa da cena deslizando até a nova borda do painel
     if (this._walkOn && this._doorsTick(dt)) dirty = true;   // portas abrindo/fechando na visão de pessoa
     if (this._walkOn && this._mkTick(t)) dirty = true;        // marcador do destino pulsando

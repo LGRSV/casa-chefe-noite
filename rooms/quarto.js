@@ -158,7 +158,7 @@ function roomQuarto(ctx) {
     const cush = rb(0.34, 0.06, 0.26, terra, 0.14, 0.7, -0.84, 0.04); cush.rotation.x = 1.2; g.add(cush); // almofada na cabeceira
     g.add(rb(1.22, 0.86, 0.09, upholst, 0, 0.55, -0.97, 0.05));                         // cabeceira estofada larga
     g.add(box(1.0, 0.012, 0.012, glow, 0, 0.99, -0.915, { cast: false }));            // LED atrás da cabeceira
-    place(g, 6.14, 3.1, Math.PI);
+    place(g, 5.25, 3.1, Math.PI);   // 22/11: cama deslocada para a esquerda para liberar a porta nova x=6,8 z 3,0-3,85
   }
 
   // ---- criado-mudo pequeno junto à cabeceira --------------------------------
@@ -171,9 +171,9 @@ function roomQuarto(ctx) {
     g.add(cyl(0.045, 0.06, 0.1, ceramic, 0.07, 0.585, 0, 20));                         // luminária: base
     g.add(cyl(0.075, 0.1, 0.13, shade, 0.07, 0.7, 0, 20, true));                       // cúpula acesa
     g.add(box(0.1, 0.05, 0.04, M.dark, -0.1, 0.555, 0.06));                           // despertador
-    place(g, 5.4, 3.9, Math.PI);
+    place(g, 4.5, 3.9, Math.PI);
   }
-  for (const s of [0, 1]) { const sl = box(0.1, 0.03, 0.26, grey, 5.42 + s * 0.12, 0.015, 3.2); sl.rotation.y = 0.15; add(sl); } // chinelos
+  for (const s of [0, 1]) { const sl = box(0.1, 0.03, 0.26, grey, 4.35 + s * 0.12, 0.015, 3.2); sl.rotation.y = 0.15; add(sl); } // chinelos
 
   // ---- guarda-roupa 2 portas na parede direita (antes da TV) ----------------
   {
@@ -225,7 +225,8 @@ function roomQuarto(ctx) {
     g.add(box(0.006, 0.5, 0.045, M.dark, 0.033, 0.86, 0));                            // escala
     g.add(box(0.02, 0.16, 0.07, woodM, 0.02, 1.19, 0));                               // mão
     g.add(box(0.002, 0.95, 0.03, M.chrome, 0.052, 0.66, 0, { cast: false }));         // cordas
-    const gt = place(g, 3.85, 3.36); gt.rotation.z = 0.12;                            // inclinado contra a parede
+    const gt = place(g, 3.85, 1.5);   // 22/11: fora da porta nova x=3,6 z 3,0-3,85
+     gt.rotation.z = 0.12;                            // inclinado contra a parede
   }
 
   // ---- mochila encostada na parede do fundo, entre a mesa e o guarda-roupa --

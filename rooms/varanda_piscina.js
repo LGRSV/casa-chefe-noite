@@ -1,4 +1,6 @@
 function roomVarandaPiscina(ctx) {
+  // 22/11 (João): o corredor/varanda NÃO existe. Faixa x 0-12,5 · z 4,2-6,2 = ÁREA EXTERNA ABERTA (piso do deck, sem parede em z=6,2, sem forro).
+  //   Portas z=4,2 dos quartos/sala fechadas; só janelas (x 2,5-3,3 e 5,5-6,4) e o vidro da cozinha (x 9,6-12,2). Texto abaixo é histórico.
   // VARANDA coberta — x 0–12,5 · z 4,2–6,2 (faces internas: x 0,075/12,425 · z 4,275/6,125).
   //   Parede da casa (z=4,2): porta casal x 1,0–1,9 · janela x 2,5–3,3 · porta quarto x 4,1–5,0 · janela x 5,5–6,4 ·
   //   porta sala x 7,4–8,3 · vidro do balcão x 9,6–12,2. Parede externa (z=6,2): porta p/ deck x 2,9–3,8 ·
@@ -97,7 +99,7 @@ function roomVarandaPiscina(ctx) {
   }
 
   // ---- capacho na porta para o deck (x 2,9–3,8) + vaso entre a janela e a porta do quarto ----
-  add(box(0.72, 0.015, 0.45, coir, 3.35, 0.02, 5.88, { cast: false }));
+  // 22/11: removido a pedido do João (capacho da porta para o deck: a porta e a parede z=6,2 não existem)
   // 22/11: removido a pedido do João (vaso junto à porta do quarto)
 
   // ---- sofá de fibra marinho com almofadas de linho, centrado na janela da varanda (x 4,6–6,6) ----
@@ -176,7 +178,8 @@ function roomVarandaPiscina(ctx) {
   // =====================================================================================
   // FAIXA DE GRAMA entre a varanda e o deck (z 6,2–7,2) e à esquerda do deck (x 2,4–2,9)
   // =====================================================================================
-  for (const z of [6.5, 6.92]) add(box(0.55, 0.03, 0.4, stone, 3.35, 0.015, z));     // pisantes da porta ao deck
+  // 22/11: removido a pedido do João (pisantes da porta ao deck); o deck continua até a faixa externa (z 6,2-7,2, x 2,9-10,9)
+  { const ext = new THREE.Mesh(new THREE.PlaneGeometry(8.0, 1.0), M.deck); ext.rotation.x = -Math.PI / 2; ext.position.set(6.9, 0.02, 6.7); ext.receiveShadow = true; add(ext); }
   for (const x of [5.9, 9.3]) {                                                        // balizadores de jardim
     add(cyl(0.04, 0.04, 0.5, M.dark, x, 0.25, 6.7, 10));
     add(cyl(0.055, 0.055, 0.1, lampOn, x, 0.55, 6.7, 10));

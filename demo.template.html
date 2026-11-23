@@ -1,11 +1,13 @@
 <!-- MAQ-RENDER -->
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Casa 3D</title>
+<title>Home Tech Palmas · Casa em 3D</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20100%20100%22%20width%3D%22512%22%20height%3D%22512%22%3E%3Cstyle%3E%3Aroot%7B--ink%3A%23efe9df%3B--lit%3A%23F2A73B%3B--sub%3A%23e2b36a%7D%3C%2Fstyle%3E%3Crect%20width%3D%22100%22%20height%3D%22100%22%20rx%3D%2222%22%20fill%3D%22%230e1630%22%2F%3E%3Cg%20transform%3D%22translate%2810%2010%29%20scale%28.8%29%22%3E%3Cpath%20fill%3D%22none%22%20stroke%3D%22var%28--ink%29%22%20stroke-width%3D%223.6%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%20d%3D%22M14%2048%20L50%2018%20L86%2048%22%2F%3E%3Cpath%20fill%3D%22none%22%20stroke%3D%22var%28--ink%29%22%20stroke-width%3D%223.6%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%20d%3D%22M23%2042%20V84%20H77%20V42%22%2F%3E%0A%3Crect%20x%3D%2234%22%20y%3D%2255%22%20width%3D%2232%22%20height%3D%2218%22%20rx%3D%229%22%20fill%3D%22none%22%20stroke%3D%22var%28--ink%29%22%20stroke-width%3D%223.6%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%3Ccircle%20cx%3D%2257%22%20cy%3D%2264%22%20r%3D%225.2%22%20fill%3D%22var%28--lit%29%22%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E">
+<link rel="stylesheet" href="intro/intro.css">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Instrument+Serif:ital@1&display=swap" rel="stylesheet">
-<meta name="description" content="Planta 3D interativa da casa: gire, dê zoom e acenda as luzes por cômodo.">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Instrument+Serif:ital@0;1&family=Manrope:wght@600;700&display=swap" rel="stylesheet">
+<meta name="description" content="Home Tech Palmas: a planta da sua casa vira uma maquete 3D ligada aos aparelhos de verdade. Controle tudo pelo celular ou pela Alexa.">
 <style>
   :root {
     --bg: #070b18; --fg: #e8ecf6; --muted: #8e99b3; --line: rgba(255,255,255,.1); --accent: #ffb36b; --accent-soft: #10162a; --banner-bg: rgba(12,16,28,.72);
@@ -46,12 +48,15 @@
   dialog label a { color: var(--accent); white-space: nowrap; }
   /* ===== Maquete renderizada ===== */
   :root { --navy: #142340; --gold: #e2b866; --card: rgba(10,14,26,.82); }
-  body.rv { background: var(--navy); overflow: hidden; }
+  body.rv { background: var(--navy); height: auto; min-height: 100%; overflow-x: clip; }
+  #maqSec { position: relative; width: 100vw; max-width: 100vw; height: 100vh; height: 100svh; overflow: hidden; }
+  html.rv-lock { overflow: hidden; }
+  body:not(.rv) #casaIntro, body:not(.rv) #maqSec, body:not(.rv) #pitch, body.mode3d #casaIntro, body.mode3d #maqSec, body.mode3d #pitch, body.mode3d .ci-fixed { display: none !important; }
   body.rv .app { display: none; }
   body.rv.mode3d .app { display: flex; }
   body.mode3d #rv { display: none; }
   body.mode3d .banner { display: none; }
-  #rv { position: fixed; inset: 0; overflow: hidden; background: #142340; user-select: none; -webkit-user-select: none; }
+  #rv { position: absolute; inset: 0; overflow: hidden; background: #142340; user-select: none; -webkit-user-select: none; }
   #rvStage { position: absolute; left: 0; top: 0; width: 1600px; height: 1000px; transform-origin: 0 0; will-change: transform; background: #142340; }
   #rvStage > img { position: absolute; left: 0; top: 0; width: 100%; height: 100%; display: block; pointer-events: none; -webkit-user-drag: none; }
   #rvStage > img.lay { opacity: 0; mix-blend-mode: screen; transition: opacity .55s ease; }
@@ -81,47 +86,237 @@
   .rvtip.show { opacity: 1; }
   .rvtip b { display: block; font-size: 14px; font-weight: 600; letter-spacing: -.01em; }
   .rvtip span { display: block; margin-top: 2px; font-size: 12px; color: var(--muted); }
-  #rvPanel { position: absolute; z-index: 7; top: 0; right: 0; bottom: 0; width: 400px; max-width: 100%; box-sizing: border-box; padding: 78px 30px 28px; overflow-y: auto; background: linear-gradient(180deg, rgba(14,20,38,.9), rgba(9,13,26,.94)); border-left: 1px solid rgba(255,255,255,.08); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); transform: translateX(104%); transition: transform .7s cubic-bezier(.22,.7,.2,1); }
-  #rv.open #rvPanel { transform: none; }
-  .pk { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
-  .pk small { font-size: 11px; letter-spacing: .24em; color: var(--muted); }
-  .pill { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; padding: 6px 12px; border-radius: 999px; border: 1px solid rgba(255,255,255,.14); color: var(--muted); white-space: nowrap; }
-  .pill.on { color: var(--gold); border-color: rgba(226,184,102,.5); background: rgba(226,184,102,.08); }
-  #rvPanel h2 { margin: 18px 0 20px; font-size: 38px; line-height: 1.02; font-weight: 500; letter-spacing: -.03em; }
-  .nums { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px; background: rgba(255,255,255,.08); border-radius: 14px; overflow: hidden; margin-bottom: 24px; }
-  .nums div { background: rgba(14,20,38,.9); padding: 13px 14px; }
-  .nums b { display: block; font-size: 24px; font-weight: 500; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
-  .nums span { font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted); }
-  .hl { font-family: var(--serif); font-style: italic; font-size: 30px; line-height: 1.1; color: var(--gold); margin: 0 0 10px; }
-  .desc { margin: 0 0 22px; font-size: 14px; line-height: 1.55; color: rgba(232,236,246,.72); }
-  .dev { list-style: none; margin: 0 0 22px; padding: 0; border-top: 1px solid rgba(255,255,255,.08); }
-  .dev li { display: flex; align-items: center; gap: 14px; padding: 15px 2px; border-bottom: 1px solid rgba(255,255,255,.08); cursor: pointer; }
-  .dev .n { font-size: 11px; letter-spacing: .1em; color: var(--muted); font-variant-numeric: tabular-nums; }
-  .dev .t { flex: 1; min-width: 0; }
-  .dev .t b { display: block; font-size: 15px; font-weight: 500; }
-  .dev .t em { display: block; font-style: normal; font-size: 12px; color: var(--muted); margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .sw { position: relative; flex: none; width: 42px; height: 24px; border-radius: 999px; background: rgba(255,255,255,.14); transition: background .25s; }
-  .sw::after { content: ""; position: absolute; left: 3px; top: 3px; width: 18px; height: 18px; border-radius: 50%; background: #fff; transition: transform .25s; }
-  li.on .sw { background: #ffb36b; } li.on .sw::after { transform: translateX(18px); }
-  li.on .n { color: var(--gold); }
-  .acts { display: flex; gap: 10px; }
-  .acts button { flex: 1; font: inherit; font-size: 13px; font-weight: 500; padding: 13px 14px; border-radius: 999px; cursor: pointer; border: 1px solid rgba(255,255,255,.16); background: transparent; color: var(--fg); transition: background .2s; }
-  .acts button:hover { background: rgba(255,255,255,.08); }
-  .acts button.pri { background: var(--gold); border-color: var(--gold); color: #1a1408; font-weight: 600; }
-  .acts button:disabled { opacity: .4; cursor: default; }
+  /* ===== Controles espaciais (modo foto) ===== */
+  #rvCtl { position: absolute; inset: 0; z-index: 7; pointer-events: none; }
+  #rvCtl .ui, #rvCtl .dv { pointer-events: auto; }
+  #rv.open .rvnav { opacity: 0; pointer-events: none; }
+  .rvnav { transition: opacity .35s; }
+  .ctop { position: absolute; left: 50%; top: max(18px, env(safe-area-inset-top, 0px)); display: flex; align-items: center; gap: 12px; height: 46px; padding: 0 6px 0 22px; border-radius: 999px; background: rgba(12,18,34,.6); border: 1px solid rgba(255,255,255,.12); backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px); box-shadow: 0 8px 30px rgba(0,0,0,.28); opacity: 0; transform: translate(-50%, -10px); transition: opacity .4s, transform .5s cubic-bezier(.22,.7,.2,1); white-space: nowrap; }
+  .ctop .cn { font-family: var(--serif); font-style: italic; font-size: 24px; line-height: 1; color: var(--gold); }
+  .ctop .cc { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); padding-left: 14px; border-left: 1px solid rgba(255,255,255,.14); font-variant-numeric: tabular-nums; }
+  .ctop .cc.on { color: #f1d9ae; }
+  .cx { display: grid; place-items: center; width: 36px; height: 36px; margin: 0; padding: 0; border: 0; border-radius: 50%; background: rgba(255,255,255,.07); color: var(--fg); cursor: pointer; transition: background .2s; }
+  .cx:hover { background: rgba(255,255,255,.16); }
+  .cscenes { position: absolute; left: 50%; bottom: max(22px, calc(env(safe-area-inset-bottom, 0px) + 14px)); display: flex; gap: 8px; max-width: calc(100% - 24px); overflow-x: auto; scrollbar-width: none; padding: 2px; opacity: 0; transform: translate(-50%, 12px); transition: opacity .4s .1s, transform .5s .1s cubic-bezier(.22,.7,.2,1); }
+  .cscenes::-webkit-scrollbar { display: none; }
+  #rv.cin .ctop { opacity: 1; transform: translate(-50%, 0); }
+  #rv.cin .cscenes { opacity: 1; transform: translate(-50%, 0); }
+  .chip { flex: none; display: inline-flex; align-items: center; gap: 8px; font: inherit; font-size: 12.5px; font-weight: 500; letter-spacing: .015em; height: 40px; padding: 0 18px 0 14px; border-radius: 999px; color: #dfe5f3; background: rgba(9,13,26,.74); border: 1px solid rgba(255,255,255,.12); backdrop-filter: blur(18px) saturate(1.2); -webkit-backdrop-filter: blur(18px) saturate(1.2); box-shadow: 0 6px 20px rgba(0,0,0,.3); cursor: pointer; transition: background .25s, border-color .25s, color .25s, transform .15s; white-space: nowrap; -webkit-tap-highlight-color: transparent; }
+  .chip::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: rgba(255,255,255,.28); transition: background .3s, box-shadow .3s; }
+  .chip:hover { background: rgba(26,34,56,.82); border-color: rgba(255,255,255,.22); }
+  .chip:active { transform: scale(.96); }
+  .chip[aria-pressed="true"] { color: #f6dcae; border-color: rgba(226,184,102,.5); background: rgba(38,28,14,.8); }
+  .chip[aria-pressed="true"]::before { background: #ffb36b; box-shadow: 0 0 8px rgba(255,179,107,.9); }
+  .chip:disabled { opacity: .4; cursor: default; }
+  /* foco do cômodo: escurece o resto da maquete e apaga os outros pontos */
+  .cdim { position: absolute; inset: 0; pointer-events: none; opacity: 0; transition: opacity .7s ease; background: radial-gradient(circle at var(--fx, 50%) var(--fy, 50%), rgba(5,8,18,0) 0, rgba(5,8,18,0) var(--r0, 60px), rgba(5,8,18,.38) var(--r1, 220px), rgba(5,8,18,.58) var(--r2, 520px)); }
+  #rv.open .cdim { opacity: 1; }
+  #rv.open .pt:not(.sel) { opacity: .28; transition: opacity .5s; }
+  #rv.open .pt:not(.sel)::after { animation: none; opacity: 0; }
+  #rv.open .pt:not(.sel):hover { opacity: .7; }
+  .dv { position: absolute; width: 0; height: 0; }
+  .orb { position: absolute; left: calc(var(--o) / -2); top: calc(var(--o) / -2); width: var(--o); height: var(--o); display: grid; place-items: center; margin: 0; padding: 0; border-radius: 50%; color: #e6ebf6; background: linear-gradient(180deg, rgba(34,44,70,.62), rgba(10,15,30,.72)); border: 1px solid rgba(255,255,255,.16); backdrop-filter: blur(16px) saturate(1.3); -webkit-backdrop-filter: blur(16px) saturate(1.3); box-shadow: 0 10px 26px rgba(0,0,0,.45), inset 0 1px 0 rgba(255,255,255,.12); cursor: pointer; opacity: 0; transform: translate(var(--tx), var(--ty)) scale(.6); transition: opacity .35s ease, transform .55s cubic-bezier(.2,.9,.25,1.12), background .35s, color .35s, box-shadow .4s, border-color .35s; transition-delay: var(--d, 0ms); -webkit-tap-highlight-color: transparent; }
+  .orb svg { width: 26px; height: 26px; transition: transform .3s; }
+  #rv.cin .orb { opacity: 1; transform: none; }
+  .orb:hover { background: linear-gradient(180deg, rgba(48,60,92,.7), rgba(16,22,40,.78)); border-color: rgba(255,255,255,.3); }
+  .orb:hover svg { transform: scale(1.06); }
+  .orb[aria-pressed="true"] { color: #3a1f05; background: radial-gradient(circle at 36% 26%, #ffe2b3, #ffb466 62%, #f39a45); border-color: rgba(255,226,180,.75); box-shadow: 0 0 0 5px rgba(255,170,90,.12), 0 0 34px rgba(255,165,80,.55), 0 10px 24px rgba(0,0,0,.4), inset 0 1px 0 rgba(255,255,255,.5); }
+  .orb[aria-pressed="true"]:hover { background: radial-gradient(circle at 36% 26%, #ffe9c4, #ffbe78 62%, #f6a453); }
+  #rv.cin .orb:active { transition-delay: 0s; transform: scale(.94); }
+  .orb:focus-visible, .chip:focus-visible, .cx:focus-visible, .mini:focus-visible { outline: 2px solid var(--gold); outline-offset: 3px; }
+  .lb { position: absolute; left: 0; top: calc(var(--o) / 2 + 8px); transform: translateX(-50%); display: flex; flex-direction: column; align-items: center; gap: 1px; white-space: nowrap; line-height: 1.2; pointer-events: none; text-shadow: 0 1px 6px rgba(0,0,0,.95), 0 0 2px rgba(0,0,0,.9); opacity: 0; transition: opacity .4s; transition-delay: calc(var(--d, 0ms) + 160ms); }
+  #rv.cin .lb { opacity: 1; }
+  .lb b { font-size: 12.5px; font-weight: 600; letter-spacing: .005em; color: #f5f7fc; }
+  .lb i { font-style: normal; font-size: 11px; font-weight: 500; color: #aab4cc; letter-spacing: .03em; font-variant-numeric: tabular-nums; }
+  .lb i.on { color: #ffd08f; }
+  .stp { display: flex; align-items: center; gap: 2px; }
+  .dv.ac-on .stp { margin-top: 4px; padding: 2px; border-radius: 999px; background: rgba(9,13,26,.74); border: 1px solid rgba(255,190,120,.3); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px); text-shadow: none; pointer-events: auto; }
+  .dv.ac-on .stp i { min-width: 30px; text-align: center; font-size: 12.5px; font-weight: 600; color: #ffd9a3; }
+  .mini { display: none; width: 26px; height: 26px; place-items: center; padding: 0; border: 0; border-radius: 50%; color: #ffe2b8; background: rgba(255,255,255,.07); cursor: pointer; font: inherit; font-size: 15px; line-height: 1; transition: background .2s, transform .15s; -webkit-tap-highlight-color: transparent; }
+  .dv.ac-on .mini { display: grid; animation: minIn .35s cubic-bezier(.2,.9,.25,1.12); }
+  .mini:hover { background: rgba(255,170,90,.25); }
+  .mini:active { transform: scale(.9); }
+  @keyframes minIn { from { opacity: 0; transform: scale(.4); } }
+  @media (max-width: 760px) {
+    .ctop { gap: 10px; padding-left: 16px; } .ctop .cn { font-size: 21px; } .ctop .cc { padding-left: 10px; font-size: 10.5px; letter-spacing: .1em; }
+    .mini { width: 34px; height: 34px; font-size: 17px; }
+    .cscenes { gap: 6px; }
+    .chip { height: 42px; padding: 0 14px; }
+    .chip::before { display: none; }
+  }
+  @media (prefers-reduced-motion: reduce) { .orb, .lb, .mini { transition: opacity .2s !important; transform: none !important; animation: none !important; } .ctop, .cscenes, .cdim { transition: opacity .2s !important; } }
   #rvBack3d { display: none; position: fixed; z-index: 20; bottom: 16px; left: 16px; font: inherit; font-size: 12.5px; font-weight: 600; padding: 9px 16px; border-radius: 999px; border: 0; background: var(--gold); color: #1a1408; cursor: pointer; box-shadow: 0 6px 20px rgba(0,0,0,.4); }
   body.mode3d #rvBack3d { display: block; }
   .rvtitle .tch { display: none; } @media (hover: none) { .rvtitle .dsk { display: none; } .rvtitle .tch { display: inline; } }
   @media (max-width: 760px) {
     .rvpill { padding-left: 14px; } .rvpill .brand { font-size: 17px; margin-right: 4px; } .rvpill button { padding: 8px 10px; font-size: 12px; } .rvpill .hide-m { display: none; }
-    .rvtitle { max-width: 86vw; bottom: 26px; } .rvtitle h1 { font-size: 46px; } .rvtitle p { font-size: 10px; letter-spacing: .18em; margin-top: 12px; }
-    #rvPanel { top: auto; left: 0; width: 100%; max-height: 55%; padding: 22px 22px 26px; border-left: 0; border-top: 1px solid rgba(255,255,255,.1); border-radius: 22px 22px 0 0; transform: translateY(104%); }
-    #rvPanel .acts { position: sticky; bottom: -26px; margin: 0 -22px -26px; padding: 12px 22px 18px; background: rgba(9,13,26,.96); }
-    #rvPanel h2 { font-size: 30px; margin: 12px 0 14px; } .nums { margin-bottom: 16px; } .nums b { font-size: 20px; } .hl { font-size: 25px; } .desc { margin-bottom: 14px; } .dev li { padding: 12px 2px; }
+    .rvtitle { max-width: 86vw; bottom: 26px; } .rvtitle h1 { font-size: 40px; } .rvtitle p { font-size: 10px; letter-spacing: .18em; margin-top: 12px; }
   }
   @media (prefers-reduced-motion: reduce) { #rvStage.anim { transition: none; } .pt::after { animation: none; } }
-  body.rv.mode3d { background: radial-gradient(ellipse 75% 70% at 50% 46%, #1b2747 0%, #0e1630 55%, #060a16 100%) fixed; overflow: auto; }
+  /* ===== Marca Home Tech Palmas (opção 4, só traços) ===== */
+  .ht { display: inline-flex; align-items: center; gap: 9px; color: #efe9df; text-decoration: none; white-space: nowrap; }
+  .ht .htm { width: 30px; height: 28px; flex: none; }
+  .ht .htw { font-family: "Manrope", "Inter", sans-serif; font-weight: 700; font-size: 16px; letter-spacing: -.02em; line-height: 1; }
+  .ht .htw i { font-family: var(--serif); font-style: italic; font-weight: 400; font-size: 1.12em; letter-spacing: 0; color: #e2b36a; margin-left: .22em; }
+  .rvpill .ht { margin-right: 12px; }
+  .rvpill button.go { display: inline-flex; align-items: center; gap: 8px; animation: goPulse 3.2s ease-out 2s 3; }
+  .rvpill button.go svg { width: 16px; height: 16px; }
+  @keyframes goPulse { 0% { box-shadow: 0 0 0 0 rgba(242,167,59,.55); } 70%, 100% { box-shadow: 0 0 0 14px rgba(242,167,59,0); } }
+  .rvtitle { pointer-events: none; max-width: min(520px, 62vw); }
+  .rvtitle h1 { font-size: clamp(30px, 3.5vw, 52px); }
+  .ci-titulo { font-family: var(--serif); font-weight: 400; font-size: clamp(40px, 6.6vw, 96px); max-width: 13ch; margin-inline: auto; text-wrap: balance; letter-spacing: -.01em; }
+  .ci-titulo::first-line { font-style: normal; }
+  .rvtitle .sub { margin: 16px 0 0; max-width: 34ch; font-size: 14px; line-height: 1.5; letter-spacing: 0; text-transform: none; color: rgba(232,236,246,.78); }
+  .rvtitle .sub::before { display: none; }
+  .rvcta { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 20px; pointer-events: auto; }
+  .rvcta a { font: inherit; font-size: 13px; font-weight: 600; text-decoration: none; padding: 11px 18px; border-radius: 999px; border: 1px solid rgba(255,255,255,.26); color: #f3f5fb; background: rgba(12,18,34,.45); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+  .rvcta a.p { background: var(--gold); border-color: var(--gold); color: #1a1408; }
+  .rvcta a:hover { filter: brightness(1.12); }
+  .rvtitle p.cap { display: flex; align-items: center; gap: 9px; margin-top: 16px; font-size: 12.5px; line-height: 1.45; letter-spacing: 0; text-transform: none; color: rgba(232,236,246,.66); }
+  .rvtitle p.cap::before { content: ""; flex: none; width: 7px; height: 7px; margin: 0; border-radius: 50%; background: #fff; opacity: .9; box-shadow: 0 0 0 4px rgba(255,255,255,.14); }
+  .rv3d { position: absolute; right: clamp(20px, 4vw, 56px); bottom: clamp(22px, 5vh, 52px); z-index: 6; display: flex; flex-direction: column; align-items: flex-end; gap: 10px; max-width: 330px; text-align: right; transition: opacity .4s; }
+  #rv.open .rv3d { opacity: 0; pointer-events: none; }
+  .rv3d button { display: inline-flex; align-items: center; gap: 12px; font: inherit; font-size: 15px; font-weight: 700; padding: 15px 26px 15px 20px; border: 0; border-radius: 999px; background: var(--gold); color: #1a1408; cursor: pointer; box-shadow: 0 10px 34px rgba(242,167,59,.32), 0 0 0 1px rgba(255,255,255,.3) inset; transition: transform .2s, box-shadow .2s; }
+  .rv3d button:hover { transform: translateY(-2px); box-shadow: 0 14px 40px rgba(242,167,59,.45), 0 0 0 1px rgba(255,255,255,.3) inset; }
+  .rv3d button svg { width: 24px; height: 24px; }
+  .rv3d span { font-size: 12.5px; line-height: 1.4; color: rgba(232,236,246,.8); text-shadow: 0 1px 12px rgba(5,8,18,.8); }
+  .rv3d button:focus-visible, .rvcta a:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+  @media (max-width: 760px) {
+    .rvpill .ht { margin-right: 6px; gap: 7px; } .rvpill .ht .htm { width: 24px; height: 22px; } .rvpill .ht .htw { font-size: 14px; } .rvpill .ht .htw i { font-size: 17px; } .rvpill button.go { display: none; }
+    .rvtitle .sub { display: none; } .rvcta { margin-top: 14px; gap: 8px; } .rvcta a { font-size: 12px; padding: 10px 14px; }
+    .rv3d { right: auto; left: 50%; bottom: auto; top: 76px; transform: translateX(-50%); align-items: center; text-align: center; width: calc(100% - 32px); max-width: 340px; gap: 8px; }
+    .rv3d button { font-size: 14px; padding: 12px 22px 12px 16px; } .rv3d span { font-size: 12px; }
+  }
+  body.rv.mode3d { background: radial-gradient(ellipse 75% 70% at 50% 46%, #1b2747 0%, #0e1630 55%, #060a16 100%) fixed; overflow: hidden; height: 100%; }
   #rv::after { content: ""; position: absolute; inset: 0; pointer-events: none; background: radial-gradient(ellipse 75% 70% at 50% 50%, transparent 55%, rgba(5,9,20,.5) 100%); z-index: 3; }
+  /* ===== Pitch (rolagem normal, editorial creme) ===== */
+  #pitch { --cr: #f6efe2; --cr2: #efe5d2; --ink: #2a2018; --ink2: #6b5a47; --fio: rgba(42,32,24,.16); --am: #F2A73B; --dk: #33261A;
+    position: relative; z-index: 2; background: var(--cr); color: var(--ink); font-family: "Inter", -apple-system, "Segoe UI", sans-serif; }
+  #pitch .sec { padding: clamp(72px, 11vw, 150px) 0; background: var(--cr); }
+  #pitch .sec.alt { background: var(--cr2); }
+  #pitch .wrap { width: min(1180px, calc(100% - 48px)); margin: 0 auto; }
+  #pitch .wrap.narrow { width: min(820px, calc(100% - 48px)); }
+  #pitch .center { text-align: center; }
+  #pitch .eyebrow { margin: 0 0 18px; font-size: 11.5px; letter-spacing: .26em; text-transform: uppercase; color: var(--ink2); }
+  #pitch .eyebrow::before { content: ""; display: inline-block; width: 28px; height: 1px; background: currentColor; vertical-align: middle; margin-right: 12px; opacity: .55; }
+  #pitch h2 { margin: 0; font-family: var(--serif); font-style: normal; font-weight: 400; font-size: clamp(38px, 6vw, 76px); line-height: 1.02; letter-spacing: -.015em; max-width: 16ch; text-wrap: balance; }
+  #pitch h2 em { font-style: italic; color: #a8641c; padding-right: .04em; }
+  #pitch .lead { margin: 20px 0 0; font-size: clamp(16px, 1.6vw, 19px); line-height: 1.5; color: var(--ink2); }
+  #pitch .txt { margin: 0; font-size: 17px; line-height: 1.65; max-width: 52ch; }
+  #pitch .note { margin: 40px 0 0; font-size: 13.5px; line-height: 1.5; color: var(--ink2); max-width: 70ch; }
+  #pitch h3 { margin: 0; font-family: var(--serif); font-weight: 400; font-size: 27px; line-height: 1.1; letter-spacing: -.005em; }
+  #pitch .split { display: grid; grid-template-columns: minmax(0, .85fr) minmax(0, 1.15fr); gap: clamp(28px, 5vw, 72px); align-items: center; margin-top: clamp(36px, 5vw, 64px); }
+  #pitch .split.tight { align-items: start; margin-top: 44px; }
+  #pitch .ticks { list-style: none; margin: 28px 0 0; padding: 0; display: grid; gap: 0; }
+  #pitch .ticks li { display: flex; align-items: center; gap: 14px; padding: 14px 0; border-top: 1px solid var(--fio); font-size: 16px; }
+  #pitch .ticks li:last-child { border-bottom: 1px solid var(--fio); }
+  #pitch .ticks svg { width: 20px; height: 20px; flex: none; color: #a8641c; }
+  #pitch .stagecard { position: relative; margin: 0; border-radius: 22px; overflow: hidden; background: radial-gradient(ellipse 80% 75% at 50% 46%, #1b2747 0%, #0e1630 70%, #070b18 100%); box-shadow: 0 30px 60px -28px rgba(42,32,24,.5); }
+  #pitch .stagecard img { display: block; width: 100%; height: auto; }
+  #pitch .stagecard figcaption { position: absolute; left: 16px; top: 14px; font-size: 10.5px; letter-spacing: .2em; text-transform: uppercase; color: rgba(232,236,246,.7); }
+  #pitch .duo { display: grid; grid-template-columns: 1.55fr 1fr; gap: 14px; align-items: end; }
+  /* passos */
+  #pitch .steps { list-style: none; margin: clamp(40px, 5vw, 64px) 0 0; padding: 0; display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; border-top: 1px solid var(--fio); }
+  #pitch .steps li { padding: 26px 26px 8px 0; border-right: 1px solid var(--fio); margin-right: 26px; }
+  #pitch .steps li:last-child { border-right: 0; margin-right: 0; }
+  #pitch .num { display: block; font-family: var(--serif); font-size: clamp(56px, 6vw, 88px); line-height: 1; color: #a8641c; opacity: .9; margin-bottom: 18px; }
+  #pitch .sico { width: 56px; height: 56px; display: grid; place-items: center; border-radius: 50%; border: 1px solid var(--fio); color: var(--ink); margin-bottom: 18px; }
+  #pitch .sico svg { width: 26px; height: 26px; }
+  #pitch .sthumb { height: 56px; width: 100%; max-width: 160px; margin-bottom: 18px; border-radius: 14px; background-color: #142340; background-size: 150% auto; background-position: 46% 50%; background-repeat: no-repeat; }
+  #pitch .steps h3 { margin-bottom: 10px; }
+  #pitch .steps p { margin: 0; font-size: 15px; line-height: 1.55; color: var(--ink2); }
+  /* cômodos */
+  #pitch .rooms { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 28px 22px; margin-top: clamp(36px, 5vw, 60px); }
+  #pitch .room { margin: 0; }
+  #pitch .crop { aspect-ratio: 4 / 3; border-radius: 20px; background-color: #142340; background-repeat: no-repeat; margin-bottom: 18px; box-shadow: 0 24px 44px -26px rgba(42,32,24,.55); transition: transform .5s cubic-bezier(.2,.7,.2,1); }
+  #pitch .room:hover .crop { transform: translateY(-4px); }
+  #pitch .room h3 { font-size: 26px; }
+  #pitch .room p { margin: 8px 0 0; font-size: 15px; line-height: 1.5; color: var(--ink2); max-width: 36ch; }
+  /* números */
+  #pitch .nums { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin-top: clamp(40px, 5vw, 64px); border-top: 1px solid var(--fio); border-bottom: 1px solid var(--fio); }
+  #pitch .nums > div { padding: 34px 28px 30px; border-right: 1px solid var(--fio); }
+  #pitch .nums > div:first-child { padding-left: 0; }
+  #pitch .nums > div:last-child { border-right: 0; }
+  #pitch .nums b { display: block; font-family: var(--serif); font-weight: 400; font-size: clamp(76px, 10vw, 150px); line-height: .9; letter-spacing: -.03em; color: var(--ink); }
+  #pitch .nums span { display: block; margin-top: 16px; font-size: 14px; line-height: 1.5; color: var(--ink2); max-width: 26ch; }
+  /* pacotes */
+  #pitch .pkgs { display: grid; grid-template-columns: 1.15fr 1fr 1fr; gap: 18px; margin-top: clamp(36px, 5vw, 60px); align-items: stretch; }
+  #pitch .pkg { display: flex; flex-direction: column; padding: 34px 30px; border-radius: 24px; background: #fffaf0; border: 1px solid var(--fio); }
+  #pitch .pkg.dark { background: var(--dk); color: #f4ead8; border-color: transparent; box-shadow: 0 34px 60px -30px rgba(51,38,26,.7); }
+  #pitch .pkg .tag { margin: 0; font-size: 11.5px; letter-spacing: .22em; text-transform: uppercase; opacity: .7; }
+  #pitch .pkg .price { margin: 16px 0 0; font-family: var(--serif); font-size: clamp(38px, 4vw, 54px); line-height: 1; letter-spacing: -.01em; }
+  #pitch .pkg .price small { display: block; font-family: "Inter", sans-serif; font-size: 12.5px; letter-spacing: .04em; opacity: .7; margin-bottom: 8px; }
+  #pitch .pkg .sub { margin: 10px 0 0; font-size: 14px; opacity: .75; }
+  #pitch .pkg .desc { margin: 20px 0 26px; font-size: 15px; line-height: 1.6; opacity: .9; flex: 1; }
+  #pitch .pkg:not(.dark) .desc { color: var(--ink2); opacity: 1; margin-bottom: 0; }
+  #pitch .btn { display: inline-flex; align-items: center; justify-content: center; align-self: flex-start; font: inherit; font-size: 15px; font-weight: 700; text-decoration: none; padding: 15px 28px; border-radius: 999px; transition: transform .2s, box-shadow .2s, filter .2s; }
+  #pitch .btn:hover { transform: translateY(-2px); filter: brightness(1.05); }
+  #pitch .btn:focus-visible, #pitch summary:focus-visible { outline: 2px solid var(--ink); outline-offset: 3px; }
+  #pitch .btn.amber { background: var(--am); color: #2a1a05; box-shadow: 0 12px 30px -10px rgba(242,167,59,.7); }
+  #pitch .btn.dark { background: var(--dk); color: #f4ead8; margin-top: 26px; }
+  #pitch .btn.big { font-size: 17px; padding: 19px 36px; align-self: center; }
+  #pitch .avul { margin-top: 36px; }
+  #pitch .avt { margin: 0 0 6px; font-size: 11.5px; letter-spacing: .22em; text-transform: uppercase; color: var(--ink2); }
+  #pitch .avul ul { list-style: none; margin: 0; padding: 0; }
+  #pitch .avul li { display: flex; justify-content: space-between; align-items: baseline; gap: 24px; padding: 16px 0; border-bottom: 1px solid var(--fio); font-size: 16px; }
+  #pitch .avul li:first-child { border-top: 1px solid var(--fio); }
+  #pitch .avul b { font-family: var(--serif); font-weight: 400; font-size: 26px; white-space: nowrap; }
+  /* maquete antes/depois */
+  #pitch .ba { display: grid; grid-template-columns: 1fr auto 1fr; gap: 18px; align-items: center; margin-top: clamp(36px, 5vw, 60px); }
+  #pitch .arrow { width: 44px; color: var(--ink2); }
+  #pitch .arrow svg { width: 100%; display: block; }
+  /* perguntas */
+  #pitch .faq { margin-top: clamp(36px, 5vw, 56px); border-top: 1px solid var(--fio); }
+  #pitch details { border-bottom: 1px solid var(--fio); }
+  #pitch summary { list-style: none; cursor: pointer; display: flex; justify-content: space-between; align-items: center; gap: 20px; padding: 26px 0; font-family: var(--serif); font-size: clamp(22px, 2.6vw, 30px); line-height: 1.2; }
+  #pitch summary::-webkit-details-marker { display: none; }
+  #pitch summary::after { content: "+"; flex: none; font-family: "Inter", sans-serif; font-size: 26px; font-weight: 300; line-height: 1; width: 40px; height: 40px; display: grid; place-items: center; border-radius: 50%; border: 1px solid var(--fio); transition: transform .3s, background .3s; }
+  #pitch details[open] summary::after { transform: rotate(45deg); background: var(--cr2); }
+  #pitch details p { margin: 0 0 28px; max-width: 60ch; font-size: 16px; line-height: 1.65; color: var(--ink2); }
+  /* final */
+  #pitch .final { position: relative; overflow: hidden; background: var(--dk); color: #f4ead8; padding: clamp(90px, 13vw, 180px) 0; }
+  #pitch .fbg { position: absolute; inset: 0; background-size: cover; background-position: 50% 45%; opacity: .16; filter: blur(2px); }
+  #pitch .final .wrap { position: relative; }
+  #pitch .final h2 { max-width: none; margin: 0 auto; }
+  #pitch .final h2 em { color: var(--am); }
+  #pitch .final .lead { color: rgba(244,234,216,.78); }
+  #pitch .final .txt { margin: 22px auto 36px; color: rgba(244,234,216,.85); }
+  #pitch .final .msg { margin: 30px auto 0; max-width: 56ch; font-size: 13.5px; line-height: 1.6; color: rgba(244,234,216,.6); }
+  #pitch .foot { background: #1f160e; color: rgba(244,234,216,.7); padding: 40px 24px 48px; display: flex; flex-direction: column; align-items: center; gap: 16px; text-align: center; }
+  #pitch .foot p { margin: 0; font-size: 12.5px; line-height: 1.6; max-width: 60ch; }
+  #pitch .foot .ht .htw { font-size: 19px; }
+  #pitch .foot .ht .htm { width: 36px; height: 34px; }
+  /* revelar ao rolar */
+  html .rev { opacity: 1; }
+  @media (prefers-reduced-motion: no-preference) {
+    #pitch .rev { opacity: 0; transform: translateY(22px); transition: opacity .8s ease, transform .9s cubic-bezier(.2,.7,.2,1); }
+    #pitch .rev.in { opacity: 1; transform: none; }
+  }
+  @media (max-width: 960px) {
+    #pitch .split { grid-template-columns: 1fr; }
+    #pitch .steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    #pitch .steps li:nth-child(2) { border-right: 0; margin-right: 0; }
+    #pitch .steps li:nth-child(n+3) { border-top: 1px solid var(--fio); margin-top: 20px; }
+    #pitch .rooms { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    #pitch .nums { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    #pitch .nums > div:nth-child(2) { border-right: 0; }
+    #pitch .nums > div:nth-child(n+3) { border-top: 1px solid var(--fio); }
+    #pitch .nums > div:nth-child(odd) { padding-left: 0; }
+    #pitch .pkgs { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 600px) {
+    #pitch .wrap, #pitch .wrap.narrow { width: calc(100% - 32px); }
+    #pitch .rooms { grid-template-columns: 1fr; }
+    #pitch .steps { grid-template-columns: 1fr; }
+    #pitch .steps li { border-right: 0; margin-right: 0; padding-right: 0; border-top: 1px solid var(--fio); margin-top: 18px; }
+    #pitch .steps li:first-child { border-top: 0; margin-top: 0; }
+    #pitch .nums b { font-size: 68px; }
+    #pitch .nums > div { padding: 26px 14px 22px 14px; }
+    #pitch .ba { grid-template-columns: 1fr; } #pitch .arrow { transform: rotate(90deg); margin: 0 auto; width: 36px; }
+    #pitch .avul li { flex-direction: column; gap: 2px; align-items: flex-start; }
+    #pitch .btn.big { font-size: 15px; padding: 17px 24px; text-align: center; }
+    #pitch .duo { grid-template-columns: 1fr; }
+  }
 </style>
 <div class="app">
   <div class="banner" role="status">
@@ -133,22 +328,197 @@
   </div>
   <div id="cardSlot"></div>
 </div>
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><symbol id="htm" viewBox="8 12 84 78"><path fill="none" stroke="currentColor" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round" d="M14 48 L50 18 L86 48"/><path fill="none" stroke="currentColor" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round" d="M23 42 V84 H77 V42"/><rect x="34" y="55" width="32" height="18" rx="9" fill="none" stroke="currentColor" stroke-width="3.6" stroke-linecap="round" stroke-linejoin="round"/><circle cx="57" cy="64" r="5.2" fill="#F2A73B"/></symbol></svg>
+<div id="casaIntro"></div>
+<section id="maqSec">
 <div id="rv" aria-label="Maquete da casa">
   <div id="rvStage"></div>
   <div class="rvnav"><div class="rvpill" role="navigation">
-    <span class="brand">Casa</span>
+    <a class="ht" href="#" aria-label="Home Tech Palmas"><svg class="htm" aria-hidden="true"><use href="#htm"/></svg><span class="htw"><b>Home Tech</b><i>Palmas</i></span></a>
     <button type="button" id="mHome">A casa</button>
     <button type="button" id="mHA" class="hide-m">Conectar ao HA</button>
     <button type="button" id="mReplay" class="hide-m">Rever giro</button>
-    <button type="button" id="mGo" class="go">Explorar em 3D</button>
+    <button type="button" id="mGo" class="go"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2.8 20 7.2v9.6l-8 4.4-8-4.4V7.2z"/><path d="M4 7.2 12 11.6 20 7.2M12 11.6v9.6"/></svg>Explorar em 3D</button>
   </div></div>
-  <div class="rvtitle"><h1>Sua casa, <em>acesa</em><br>do seu jeito</h1><p><span class="dsk">Passe o mouse num cômodo</span><span class="tch">Toque num cômodo</span></p></div>
+  <div class="rvtitle"><h1>Sua casa inteira,<br>na palma da <em>mão.</em></h1><p class="sub">Maquete 3D feita da sua planta, ligada aos aparelhos de verdade. Luz, ar-condicionado, TV e piscina pelo celular ou pela Alexa.</p><div class="rvcta"><a class="p" href="https://wa.me/5563999542772?text=Ol%C3%A1%21%20Vi%20a%20maquete%203D%20da%20casa%20no%20site%20da%20Home%20Tech%20Palmas%20e%20quero%20agendar%20uma%20visita%20t%C3%A9cnica.%20Posso%20te%20mandar%20a%20planta%20ou%20fotos%20do%20im%C3%B3vel." target="_blank" rel="noopener">Agendar visita técnica</a><a href="#como">Ver como funciona</a></div><p class="cap"><span class="dsk">Demonstração: clique em um ponto para abrir o cômodo e testar os comandos.</span><span class="tch">Demonstração: toque em um ponto para abrir o cômodo e testar os comandos.</span></p></div>
+  <div class="rv3d ui"><button type="button" id="mGo2"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2.8 20 7.2v9.6l-8 4.4-8-4.4V7.2z"/><path d="M4 7.2 12 11.6 20 7.2M12 11.6v9.6"/></svg>Explorar em 3D</button><span>Entre no modelo 3D e veja cada cômodo pela câmera.</span></div>
   <div class="rvtip" id="rvTip"><b></b><span></span></div>
-  <aside id="rvPanel" aria-live="polite"></aside>
+  <div id="rvCtl" aria-label="Controles do cômodo">
+    <div class="cdim" id="cDim"></div>
+    <div class="ui ctop" id="cTop" role="group"><span class="cn" id="cName"></span><span class="cc" id="cCount" aria-live="polite"></span><button type="button" class="cx" id="cClose" aria-label="Fechar cômodo"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button></div>
+    <div id="cRing"></div>
+    <div class="ui cscenes" id="cScenes" role="group" aria-label="Cenas"></div>
+  </div>
 </div>
+</section>
+<main id="pitch">
+
+<section class="sec s1" id="proposta">
+  <div class="wrap">
+    <p class="eyebrow rev">Proposta</p>
+    <h2 class="rev">Você vê a casa antes de <em>controlar</em> a casa.</h2>
+    <p class="lead rev">A maquete é a própria tela de controle.</p>
+    <div class="split">
+      <div class="rev">
+        <p class="txt">Em vez de uma lista de aparelhos, você recebe sua casa em 3D. Toque no cômodo e acenda a luz, ligue o ar-condicionado ou a bomba da piscina. Integra com Home Assistant e Alexa.</p>
+        <ul class="ticks"><li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>Maquete a partir da planta</li><li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>Painel no celular, tablet ou TV</li><li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>Alexa e Home Assistant juntos</li></ul>
+      </div>
+      <div class="duo rev">
+        <figure class="stagecard big"><img src="render/web/noite.webp" alt="Maquete da casa com todos os cômodos acesos" loading="lazy" width="2400" height="1500"><figcaption>Noite</figcaption></figure>
+        <figure class="stagecard"><img src="render/web/base.webp" alt="Maquete da casa em corte, vista de cima" loading="lazy" width="2400" height="1500"><figcaption>Dia</figcaption></figure>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="sec s2 alt" id="como">
+  <div class="wrap">
+    <p class="eyebrow rev">Como funciona</p>
+    <h2 class="rev">Da planta ao <em>celular</em> em quatro passos.</h2>
+    <p class="lead rev">Você conversa, a gente cuida do resto.</p>
+    <ol class="steps">
+      <li class="rev"><span class="num">01</span><div class="sico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="3.5" width="17" height="17" rx="1.5"/><path d="M3.5 10h7v10.5M10.5 14h10M14.5 3.5V10"/></svg></div><h3>Planta</h3><p>Você manda a planta ou fotos e conta o que quer comandar.</p></li>
+      <li class="rev"><span class="num">02</span><div class="sthumb" role="img" aria-label="Casa inteira em maquete 3D" style="background-image:url(render/web/base.webp)"></div><h3>Maquete 3D</h3><p>A casa é montada em 3D, cômodo por cômodo, com o painel igual ao da demonstração.</p></li>
+      <li class="rev"><span class="num">03</span><div class="sico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 5.5a4 4 0 0 0-5 5L3.5 16.5l4 4 6-6a4 4 0 0 0 5-5l-2.5 2.5-2.5-.5-.5-2.5z"/></svg></div><h3>Instalação</h3><p>A gente instala e configura os aparelhos na sua casa e explica tudo no dia da entrega.</p></li>
+      <li class="rev"><span class="num">04</span><div class="sico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="7" y="2.5" width="10" height="19" rx="2.2"/><path d="M10.5 18.5h3"/><path d="M9.5 8.5h5M9.5 11.5h3"/></svg></div><h3>Controle</h3><p>Celular, tablet, TV ou voz pela Alexa. Aparelhos e senhas ficam no seu nome.</p></li>
+    </ol>
+  </div>
+</section>
+
+<section class="sec s3" id="comodos">
+  <div class="wrap">
+    <p class="eyebrow rev">Por cômodo</p>
+    <h2 class="rev">Cada cômodo, um <em>comando</em>.</h2>
+    <p class="lead rev">Exemplos reais da casa da demonstração.</p>
+    <div class="rooms"><article class="room rev"><div class="crop" role="img" style="background-image:url(render/web/quarto.webp),url(render/web/base.webp);background-size:270% auto,270% auto;background-position:47.0% 2.1%,47.0% 2.1%;background-blend-mode:screen,normal"></div><h3>Quarto</h3><p>Luz do teto, fita de LED colorida e TV.</p></article><article class="room rev"><div class="crop" role="img" style="background-image:url(render/web/sala.webp),url(render/web/balcao.webp),url(render/web/base.webp);background-size:270% auto,270% auto,270% auto;background-position:68.5% 5.3%,68.5% 5.3%,68.5% 5.3%;background-blend-mode:screen,screen,normal"></div><h3>Sala e cozinha</h3><p>Luzes e ar-condicionado pelo celular e pela voz.</p></article><article class="room rev"><div class="crop" role="img" style="background-image:url(render/web/varanda.webp),url(render/web/base.webp);background-size:240% auto,240% auto;background-position:49.9% 17.0%,49.9% 17.0%;background-blend-mode:screen,normal"></div><h3>Varanda e luz externa</h3><p>Acende a área externa de uma vez.</p></article><article class="room rev"><div class="crop" role="img" style="background-image:url(render/web/piscina.webp),url(render/web/base.webp);background-size:190% auto,190% auto;background-position:50.3% 52.6%,50.3% 52.6%;background-blend-mode:screen,normal"></div><h3>Piscina</h3><p>Bomba e LED subaquático, comandados separadamente.</p></article><article class="room rev"><div class="crop" role="img" style="background-image:url(render/web/garagem.webp),url(render/web/base.webp);background-size:240% auto,240% auto;background-position:14.5% 76.9%,14.5% 76.9%;background-blend-mode:screen,normal"></div><h3>Garagem</h3><p>Luz com interruptor inteligente.</p></article><article class="room rev"><div class="crop" role="img" style="background-image:url(render/web/noite.webp);background-size:165% auto;background-position:58% 52%"></div><h3>Presença e luminosidade</h3><p>Sensores que sabem se tem alguém e quanta luz há, para disparar rotinas.</p></article></div>
+    <p class="note rev">Quarto de casal, banheiro, dispensa, jardim e quintal também estão na maquete; o que automatizar neles é escolha sua.</p>
+  </div>
+</section>
+
+<section class="sec s4 alt" id="numeros">
+  <div class="wrap">
+    <p class="eyebrow rev">Em números</p>
+    <h2 class="rev">A demonstração, <em>contada</em>.</h2>
+    <p class="lead rev">Números da casa que você acabou de explorar.</p>
+    <div class="nums">
+      <div class="rev"><b>11</b><span>cômodos e áreas na maquete</span></div>
+      <div class="rev"><b>8</b><span>pontos de luz e tomadas controláveis (luzes, LED, garagem, bomba e LED da piscina)</span></div>
+      <div class="rev"><b>12</b><span>aparelhos e sensores no painel (luzes, ar-condicionado, TV, presença e luminosidade)</span></div>
+      <div class="rev"><b>12</b><span>automações de exemplo (botões de cabeceira, sensor, rotina da manhã)</span></div>
+    </div>
+    <p class="note rev">Demonstração com estados simulados. Na sua casa, o painel fala com os aparelhos reais.</p>
+  </div>
+</section>
+
+<section class="sec s5" id="pacotes">
+  <div class="wrap">
+    <p class="eyebrow rev">Pacotes</p>
+    <h2 class="rev">Comece pequeno. Cresça <em>quando</em> quiser.</h2>
+    <p class="lead rev">Preços de partida; o equipamento é à parte, pelo preço de loja.</p>
+    <div class="pkgs">
+      <article class="pkg dark rev">
+        <p class="tag">Essencial</p>
+        <p class="price"><small>a partir de</small> R$ 690</p>
+        <p class="sub">Instalação e configuração.</p>
+        <p class="desc">De 1 a 3 ambientes. Alexa ou Google configurado, até 6 pontos (interruptor, lâmpada ou tomada), ar-condicionado pelo celular em 1 ambiente, até 5 rotinas, app no celular, explicação no dia da entrega.</p>
+        <a class="btn amber" href="https://wa.me/5563999542772?text=Ol%C3%A1%21%20Quero%20um%20or%C3%A7amento%20do%20pacote%20Essencial%20da%20Home%20Tech%20Palmas." target="_blank" rel="noopener">Pedir orçamento</a>
+      </article>
+      <article class="pkg rev">
+        <p class="tag">Casa conectada</p>
+        <p class="price">Sob orçamento</p>
+        <p class="desc">Casa inteira com Home Assistant, sensores de presença, cenas (chegar, sair, dormir, cinema), painel no celular e no tablet, Alexa ou Google integrados.</p>
+      </article>
+      <article class="pkg rev">
+        <p class="tag">Casa em maquete 3D</p>
+        <p class="price">Sob orçamento</p>
+        <p class="desc">A maquete do seu imóvel ligada aos aparelhos, com painel para tablet ou TV.</p>
+      </article>
+    </div>
+    <div class="avul rev">
+      <p class="avt">Avulsos, a partir de</p>
+      <ul>
+        <li><span>Ar-condicionado pelo celular e pela Alexa, por ambiente</span><b>R$ 170</b></li>
+        <li><span>Sensor de presença</span><b>R$ 120</b></li>
+        <li><span>Fechadura digital</span><b>R$ 700</b></li>
+        <li><span>Wi-Fi, câmeras, cortinas</span><b>Sob orçamento</b></li>
+      </ul>
+    </div>
+    <p class="note rev">Valores de partida; mudam conforme o número de pontos e a instalação existente.</p>
+  </div>
+</section>
+
+<section class="sec s6 alt" id="maquete">
+  <div class="wrap">
+    <p class="eyebrow rev">Sua casa em maquete 3D</p>
+    <h2 class="rev">A sua casa, em <em>maquete</em>.</h2>
+    <p class="lead rev">O mesmo painel desta página, com a sua planta.</p>
+    <div class="ba rev">
+      <figure class="stagecard"><img src="render/web/base.webp" alt="A planta virou casa: maquete em vista de cima" loading="lazy" width="2400" height="1500"><figcaption>A planta virou casa</figcaption></figure>
+      <span class="arrow"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12h17M14 6l6 6-6 6"/></svg></span>
+      <figure class="stagecard"><img src="render/web/noite.webp" alt="A casa acesa" loading="lazy" width="2400" height="1500"><figcaption>A casa acesa</figcaption></figure>
+    </div>
+    <div class="split tight">
+      <p class="txt rev">Você manda a planta. A gente monta a maquete 3D do seu imóvel, com os cômodos que acendem e os controles dos seus aparelhos. Serve de painel no celular, no tablet ou na TV. Preço sob orçamento.</p>
+      <div class="rev">
+        <ul class="ticks"><li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>Feita da sua planta</li><li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>Cômodos que acendem ao tocar</li><li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>Controles dos aparelhos reais</li><li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>Integra com Home Assistant e Alexa</li></ul>
+        <a class="btn dark" href="https://wa.me/5563999542772?text=Ol%C3%A1%21%20Quero%20um%20or%C3%A7amento%20da%20minha%20casa%20em%20maquete%203D%20com%20painel%20de%20automa%C3%A7%C3%A3o." target="_blank" rel="noopener">Quero a minha em 3D</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="sec s7" id="perguntas">
+  <div class="wrap narrow">
+    <p class="eyebrow rev">Perguntas</p>
+    <h2 class="rev">O que costumam <em>perguntar</em>.</h2>
+    <p class="lead rev">Respostas diretas, sem promessa de milagre.</p>
+    <div class="faq rev">
+      <details open><summary>Preciso quebrar parede ou trocar a fiação?</summary><p>Na maioria das casas, não. O interruptor inteligente entra no lugar do comum. Alguns modelos pedem fio neutro na caixa; a gente confere antes de você comprar qualquer coisa.</p></details>
+      <details><summary>Funciona com Alexa e com Google?</summary><p>Sim. A gente configura o assistente que você já usa, e com o Home Assistant os dois podem conviver.</p></details>
+      <details><summary>Se a internet cair, a casa para?</summary><p>Os interruptores continuam funcionando na mão e as automações que rodam dentro de casa seguem. Comando de voz e aparelhos que dependem da nuvem do fabricante precisam de internet. A gente mostra o que depende de quê antes de instalar.</p></details>
+      <details><summary>Meu ar-condicionado não é inteligente. Dá para controlar?</summary><p>Dá, com um emissor infravermelho que faz o papel do controle remoto. Ele envia o comando, mas não sabe se alguém usou o controle original.</p></details>
+      <details><summary>Quanto custa a maquete 3D?</summary><p>É sob orçamento, depois de uma conversa sem compromisso e de ver a planta. O pacote Essencial parte de R$ 690, com equipamentos à parte.</p></details>
+    </div>
+  </div>
+</section>
+
+<section class="final" id="contato">
+  <div class="fbg" style="background-image:url(render/web/noite.webp)"></div>
+  <div class="wrap narrow center rev">
+    <h2>Agende uma <em>visita</em> técnica.</h2>
+    <p class="lead">Conversa sem compromisso, pelo WhatsApp.</p>
+    <p class="txt">Conte o que você quer comandar e mande a planta ou fotos. A gente responde com os próximos passos e um orçamento.</p>
+    <a class="btn amber big" href="https://wa.me/5563999542772?text=Ol%C3%A1%21%20Vi%20a%20maquete%203D%20da%20casa%20no%20site%20da%20Home%20Tech%20Palmas%20e%20quero%20agendar%20uma%20visita%20t%C3%A9cnica.%20Posso%20te%20mandar%20a%20planta%20ou%20fotos%20do%20im%C3%B3vel." target="_blank" rel="noopener">Agendar visita técnica no WhatsApp</a>
+    <p class="msg">Mensagem pronta: &ldquo;Olá! Vi a maquete 3D da casa no site da Home Tech Palmas e quero agendar uma visita técnica. Posso te mandar a planta ou fotos do imóvel.&rdquo;</p>
+  </div>
+</section>
+
+<footer class="foot">
+  <a class="ht" href="#" aria-label="Home Tech Palmas"><svg class="htm" aria-hidden="true"><use href="#htm"/></svg><span class="htw"><b>Home Tech</b><i>Palmas</i></span></a>
+  <p>Home Tech Palmas · automação residencial em Palmas-TO · WhatsApp comercial. Sem formulário e sem coleta de dados.</p>
+</footer>
+
+</main>
+
 <button id="rvBack3d" type="button">Voltar à maquete</button>
 <script>if(!/[?&](look=classico|modo=3d)/.test(location.search)||/modo=3d/.test(location.search))document.body.classList.add('rv');</script>
 <div class="toast" id="toast"></div>
+<script src="intro/intro.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function () {
+  var b = document.body;
+  var io = 'IntersectionObserver' in window ? new IntersectionObserver(function (es) { es.forEach(function (e) { if (e.isIntersecting) { e.target.classList.add('in'); io.unobserve(e.target); } }); }, { threshold: .12 }) : null;
+  document.querySelectorAll('#pitch .rev').forEach(function (el) { if (io) io.observe(el); else el.classList.add('in'); });
+  if (!b.classList.contains('rv') || b.classList.contains('mode3d') || !window.CasaIntro) return;
+  CasaIntro.init({
+    el: '#casaIntro', pasta: 'intro/quadros/', prefixo: 'intro_', ext: '.jpg', quadros: 72, digitos: 3,
+    sobretitulo: 'Home Tech Palmas · automação residencial', titulo: 'Sua casa inteira, na palma da mão.',
+    subtitulo: 'Maquete 3D feita da sua planta, ligada aos aparelhos de verdade.', botao: 'Entrar na casa',
+    alvo: '#maqSec', alvoImg: '.base', comprimento: 4
+  });
+});
+</script>
+
 <dialog id="haDlg">
   <form method="dialog" id="haForm">
     <h2>Conectar ao Home Assistant</h2>
@@ -208,7 +578,7 @@ const toast = (msg) => { toastEl.textContent = msg; toastEl.classList.add('show'
 const LOOK = new URLSearchParams(location.search).get('look') === 'classico' ? 'classico' : 'maquete';
 document.body.classList.toggle('maq', LOOK === 'maquete');
 const card = document.createElement('casa3d-card'); card.id = 'card';
-card.setConfig({ title: 'Casa 3D', labels: LOOK !== 'maquete', mode: 'night', height: '100%', look: LOOK });   // maquete: os pontinhos brancos fazem o papel dos rótulos
+card.setConfig({ title: 'Casa 3D', labels: LOOK !== 'maquete', mode: 'night', height: '100%', look: LOOK, static_view: true });   // maquete: os pontinhos brancos fazem o papel dos rótulos
 document.getElementById('cardSlot').replaceWith(card);
 // Modo ao vivo: quando há endereço+token salvos, `live` assume e o mock fica parado
 let live = null;
@@ -415,9 +785,9 @@ if (lsGet(LS_URL) && lsGet(LS_TOKEN)) startLive(lsGet(LS_URL), lsGet(LS_TOKEN));
   const IMG = 'render/web/';
   // pontos (centro de cada cômodo na imagem) — vêm de render/saida/pontos.json
   const PTS = {
-    quarto_casal: [0.3864, 0.2212, 'Quarto Casal'], quarto: [0.4809, 0.2337, 'Quarto'], sala: [0.5755, 0.2461, 'Sala'], balcao: [0.6573, 0.2569, 'Cozinha'],
-    varanda: [0.4993, 0.3350, 'Varanda'], piscina: [0.5016, 0.5094, 'Piscina'], jardim: [0.6795, 0.5161, 'Jardim'], quintal: [0.5297, 0.7214, 'Quintal'],
-    banheiro: [0.3332, 0.3929, 'Banheiro'], dispensa: [0.3156, 0.4762, 'Dispensa'], garagem: [0.2930, 0.6346, 'Garagem'],
+    quarto_casal: [0.3857, 0.2732, 'Quarto Casal'], quarto: [0.4790, 0.2859, 'Quarto'], sala: [0.5725, 0.2986, 'Sala'], balcao: [0.6532, 0.3097, 'Cozinha'],
+    varanda: [0.4971, 0.3895, 'Varanda'], piscina: [0.4991, 0.5673, 'Piscina'], jardim: [0.6743, 0.5741, 'Jardim'], quintal: [0.5265, 0.7828, 'Quintal'],
+    banheiro: [0.3332, 0.4485, 'Banheiro'], dispensa: [0.3158, 0.5335, 'Dispensa'], garagem: [0.2936, 0.6946, 'Garagem'],
   };
   const ZOOM = { quarto_casal: 2.6, quarto: 2.6, sala: 2.6, balcao: 2.6, varanda: 2.3, piscina: 1.8, jardim: 2, quintal: 1.7, banheiro: 3, dispensa: 3, garagem: 2.3 };
   const TEXT = {
@@ -433,7 +803,7 @@ if (lsGet(LS_URL) && lsGet(LS_TOKEN)) startLive(lsGet(LS_URL), lsGet(LS_TOKEN));
     dispensa: 'Dispensa com prateleiras e tanque. A luz é compartilhada com o banheiro.',
     garagem: 'Garagem coberta com o carro, portão de enrolar e muro ao redor do lote.',
   };
-  const stage = document.getElementById('rvStage'), tip = document.getElementById('rvTip'), panel = document.getElementById('rvPanel');
+  const stage = document.getElementById('rvStage'), tip = document.getElementById('rvTip');
   const mk = (tag, cls, attrs) => { const e = document.createElement(tag); if (cls) e.className = cls; Object.assign(e, attrs || {}); return e; };
 
   // ---- cena: base + camadas de luz + pontinhos ----
@@ -456,15 +826,15 @@ if (lsGet(LS_URL) && lsGet(LS_TOKEN)) startLive(lsGet(LS_URL), lsGet(LS_TOKEN));
   const onHouse = (xr, yr) => { if (!mask) return true; const x = Math.floor(xr * 240), y = Math.floor(yr * 150); if (x < 0 || y < 0 || x >= 240 || y >= 150) return false; return mask[(y * 240 + x) * 4 + 3] > 40; };
 
   // ---- câmera (zoom CSS) ----
-  let S = 1, vw = 0, vh = 0, sel = null, ready = false, busy = true;
+  let S = 1, vw = 0, vh = 0, sel = null, focus = { x: 0, y: 0 }, ready = false, busy = true;
   const mobile = () => innerWidth <= 760;
   const view = (fx, fy, zoom, anim) => {
     vw = innerWidth; vh = innerHeight;
     const m = mobile(), s0 = m ? vw * 0.97 / (0.62 * W) : Math.min(vw * 0.88 / (0.62 * W), vh * 0.86 / (0.9 * H));
     let s = s0 * zoom, cx, cy;
     if (zoom === 1) { cx = m ? vw / 2 : vw * 0.6; cy = m ? vh * 0.42 : vh * 0.53; }
-    else { s = Math.min(s, 1.45); cx = m ? vw / 2 : (vw - 400) / 2; cy = m ? vh * 0.225 + 24 : vh * 0.52; }
-    S = s;
+    else { s = Math.min(s, 1.45); cx = vw / 2; cy = vh * (m ? 0.47 : 0.5); }
+    S = s; focus = { x: cx, y: cy };
     stage.classList.toggle('anim', !!anim);
     stage.style.setProperty('--inv', (1 / s).toFixed(4));
     stage.style.transform = `translate(${(cx - fx * W * s).toFixed(1)}px,${(cy - fy * H * s).toFixed(1)}px) scale(${s.toFixed(4)})`;
@@ -497,9 +867,9 @@ if (lsGet(LS_URL) && lsGet(LS_TOKEN)) startLive(lsGet(LS_URL), lsGet(LS_TOKEN));
     return p.length ? p.join(' · ') : 'tudo desligado';
   };
   const showTip = (id) => {
-    const b = pts[id].getBoundingClientRect(), r = info(id);
+    const b = pts[id].getBoundingClientRect(), r = info(id), o = rv.getBoundingClientRect();
     tip.firstChild.textContent = r.label; tip.lastChild.textContent = stateText(r);
-    tip.style.left = Math.max(80, Math.min(innerWidth - 80, b.left + b.width / 2)) + 'px'; tip.style.top = (b.top + b.height / 2) + 'px'; tip.classList.add('show');
+    tip.style.left = Math.max(80, Math.min(innerWidth - 80, b.left + b.width / 2)) - o.left + 'px'; tip.style.top = (b.top + b.height / 2) - o.top + 'px'; tip.classList.add('show');
   };
   const setHover = (id) => {
     if (id === hov) { if (id) showTip(id); return; }
@@ -508,45 +878,133 @@ if (lsGet(LS_URL) && lsGet(LS_TOKEN)) startLive(lsGet(LS_URL), lsGet(LS_TOKEN));
     if (id) { pts[id].classList.add('hov'); showTip(id); } else tip.classList.remove('show');
   };
 
-  // ---- painel ----
-  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
-  const highlight = (r) => {
-    const on = r.devices.filter((d) => d.on);
-    if (!r.devices.length) return 'Em repouso';
-    if (on.some((d) => d.kind === 'media')) return 'Noite de cinema';
-    if (on.some((d) => d.kind === 'climate')) return 'Ambiente climatizado';
-    if (r.id === 'piscina' && on.length) return 'Noite na piscina';
-    if (on.some((d) => d.kind === 'light' || d.kind === 'switch')) return 'Luz aconchegante';
-    return 'Em repouso';
+  // ---- controles espaciais: botões de vidro em arco sobre a própria imagem ----
+  const ctl = document.getElementById('rvCtl'), ring = document.getElementById('cRing'), cScenes = document.getElementById('cScenes');
+  const cName = document.getElementById('cName'), cCount = document.getElementById('cCount');
+  const ico = (p) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${p}</svg>`;
+  const WAVE = (y) => `M3 ${y}c1.5-1.5 3-1.5 4.5 0s3 1.5 4.5 0 3-1.5 4.5 0 3 1.5 4.5 0`;
+  const ICONS = {
+    bulb: '<path d="M9.5 18.5h5M10.3 21h3.4"/><path d="M12 3a6 6 0 0 0-3.7 10.7c.6.5 1 1.2 1.1 2h5.2c.1-.8.5-1.5 1.1-2A6 6 0 0 0 12 3z"/>',
+    led: '<path d="M7 8.5V6M12 8.5V4M17 8.5V6"/><rect x="3" y="11.5" width="18" height="5" rx="2.5"/><path d="M7.5 14h.01M12 14h.01M16.5 14h.01"/>',
+    tv: '<rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8.5 20.5h7M12 17v3.5"/>',
+    ac: '<rect x="3" y="4.5" width="18" height="8" rx="2"/><path d="M7 8.5h5"/><path d="M7.5 15.5c0 1.3-.9 1.7-.9 3M12 15.5c0 1.3-.9 1.7-.9 3M16.5 15.5c0 1.3-.9 1.7-.9 3"/>',
+    pump: '<path d="M12 3c2.6 3.1 4.2 5.2 4.2 7.3a4.2 4.2 0 0 1-8.4 0C7.8 8.2 9.4 6.1 12 3z"/><path d="' + WAVE(17.5) + '"/>',
+    pool: '<path d="M12 2.5V5M5.8 5l1.7 1.7M18.2 5l-1.7 1.7"/><path d="' + WAVE(12) + '"/><path d="' + WAVE(17) + '"/>',
+    outdoor: '<path d="M9 3h6l1.2 4H7.8L9 3z"/><path d="M8 7v6.5a4 4 0 0 0 8 0V7"/><path d="M12 17.5V21"/>',
   };
-  const subtitle = (d) => (d.kind === 'light' || d.kind === 'switch') ? (d.on ? 'ligado' : 'desligado') : (d.on ? (d.text || 'ligado').split(' · ').slice(0, 2).join(' · ') : 'desligado');
-  const renderPanel = () => {
+  const iconOf = (d) => d.key === 'externa' ? 'outdoor' : (ICONS[d.icon] ? d.icon : d.kind === 'climate' ? 'ac' : d.kind === 'media' ? 'tv' : d.kind === 'switch' ? 'pump' : 'bulb');
+  const nameOf = (d) => d.key === 'externa' ? 'Luz externa' : d.kind === 'media' ? 'TV' : d.kind === 'climate' ? 'Ar' : (d.short || d.label);
+  const stateOf = (d) => {
+    if (d.kind === 'climate') return d.on ? (d.temp != null ? Math.round(d.temp) + '°' : 'ligado') : 'desligado';
+    if (d.kind === 'media') { if (!d.on) return 'desligada'; const t = (d.text || '').split(' · ')[0].trim(); return t && !/^(ligad|tocand|playing|paused|pausad)/i.test(t) && t.length < 14 ? t : 'ligada'; }
+    if (d.kind === 'switch' || d.icon === 'led' || d.icon === 'pool') return d.on ? 'ligada' : (d.kind === 'switch' ? 'desligada' : 'apagada');
+    return d.on ? 'acesa' : 'apagada';
+  };
+  const plural = (n, a, b) => n + ' ' + (n === 1 ? a : b);
+  let slots = [], cinT = 0;
+  const safeBox = () => { const m = mobile(); return { t: (m ? 78 : 80) + 6, b: (m ? 86 : 84) + 16, l: 16, r: 16 }; };
+  // posições do arco: escolhe a direção com mais folga (sem sair da tela, sem cobrir o ponto)
+  const arcPositions = (n, P, low) => {
+    const m = mobile(), o = m ? 58 : 60, gap = m ? 88 : 96, R0 = m ? 100 : 110, sb = safeBox();
+    const ang = (R) => 2 * Math.asin(Math.min(1, gap / (2 * R)));
+    let R = R0; while (n > 1 && (n - 1) * ang(R) > Math.PI * 1.25 && R < 190) R += 8;
+    const step = n > 1 ? ang(R) : 0;
+    let best = null;
+    for (let a = 0; a < 360; a += 10) {
+      const th = a * Math.PI / 180, pos = []; let clear = 1e9;
+      for (let i = 0; i < n; i++) {
+        const t = th + (i - (n - 1) / 2) * step, x = P.x + R * Math.cos(t), y = P.y + R * Math.sin(t);
+        pos.push({ x, y, t });
+        clear = Math.min(clear, x - o / 2 - sb.l, innerWidth - sb.r - x - o / 2, y - o / 2 - sb.t, innerHeight - sb.b - y - o / 2 - 40 - (low && low[i] ? (m ? 44 : 36) : 0));
+      }
+      const up = 1 - Math.abs((a - 90 + 540) % 360 - 180) / 180;   // 1 = para baixo (cobre a parede da frente, não o interior)
+      const score = Math.min(clear, 40) + up * 6;
+      if (!best || score > best.score) best = { score, pos, th, step };
+    }
+    return { pos: best.pos, o, R, th: best.th, step: best.step };
+  };
+  const focusPt = () => (sel ? { x: focus.x, y: focus.y } : { x: innerWidth / 2, y: innerHeight / 2 });
+  const buildCtl = (animated) => {
+    const r = info(sel); clearTimeout(cinT);
+    ring.textContent = ''; slots = [];
+    cName.textContent = r.label;
+    const P = focusPt(), n = r.devices.length, { pos, o, R } = arcPositions(n, P, r.devices.map((d) => d.kind === 'climate'));
+    // escurece em volta: o cômodo fica claro e o arco cai na meia-luz, o resto da maquete recua
+    const cs = ctl.style;
+    cs.setProperty('--fx', P.x.toFixed(0) + 'px'); cs.setProperty('--fy', P.y.toFixed(0) + 'px');
+    cs.setProperty('--r0', Math.max(70, R * 0.9).toFixed(0) + 'px'); cs.setProperty('--r1', (R + o + 150).toFixed(0) + 'px'); cs.setProperty('--r2', (R + o + 560).toFixed(0) + 'px');
+    r.devices.forEach((d, i) => {
+      const dv = mk('div', 'dv'), p = pos[i], ux = Math.cos(p.t), uy = Math.sin(p.t);
+      dv.dataset.k = d.key; dv.style.setProperty('--o', o + 'px');
+      const fx = focusPt();
+      dv.style.cssText += `left:${p.x.toFixed(1)}px;top:${p.y.toFixed(1)}px;--tx:${(fx.x - p.x).toFixed(1)}px;--ty:${(fx.y - p.y).toFixed(1)}px;--d:${i * 40}ms`;
+      const orb = mk('button', 'orb', { type: 'button', innerHTML: ico(ICONS[iconOf(d)]) });
+      const lb = mk('span', 'lb'), nm = mk('b'), st = mk('i');
+      dv.append(orb, lb);
+      orb.addEventListener('click', (e) => { e.stopPropagation(); api.toggle(sel, d.key); });
+      const s = { d, dv, orb, lb, nm, st };
+      if (d.kind === 'climate') {   // ar ligado: a temperatura vira um seletor "− 23° +" logo abaixo do nome
+        const stp = mk('span', 'stp');
+        s.mini = [-1, 1].map((sg) => {
+          const b = mk('button', 'mini', { type: 'button', textContent: sg < 0 ? '−' : '+' }); b.setAttribute('aria-label', sg < 0 ? 'Diminuir temperatura' : 'Aumentar temperatura');
+          b.addEventListener('click', (e) => { e.stopPropagation(); api.adjust(sel, d.key, sg); });
+          return b;
+        });
+        stp.append(s.mini[0], st, s.mini[1]); lb.append(nm, stp);
+      } else lb.append(nm, st);
+      ring.append(dv); slots.push(s);
+    });
+    // cenas
+    cScenes.textContent = '';
+    const defs = [{ id: 'all', name: 'Ligar tudo', want: () => Object.fromEntries(r.devices.map((d) => [d.key, true])) },
+      { id: 'none', name: 'Apagar tudo', want: () => Object.fromEntries(r.devices.map((d) => [d.key, false])) }];
+    if (r.devices.some((d) => d.kind === 'media')) defs.push({ id: 'cine', name: 'Noite de cinema', want: () => Object.fromEntries(r.devices.map((d) => [d.key, d.kind === 'media' || d.icon === 'led'])) });
+    if (r.id === 'piscina' && r.devices.length > 1) defs.push({ id: 'pool', name: 'Noite na piscina', want: () => Object.fromEntries(r.devices.map((d) => [d.key, d.kind === 'switch' || d.icon === 'led' || d.icon === 'pool'])) });
+    defs.forEach((df) => {
+      const c = mk('button', 'chip', { type: 'button', textContent: df.name }); c.dataset.sc = df.id; c.disabled = !r.devices.length;
+      c.addEventListener('click', (e) => { e.stopPropagation(); const cur = info(sel), w = df.want(); for (const d of cur.devices) if (d.key in w && !!w[d.key] !== d.on) api.toggle(sel, d.key); });
+      c.__df = df; cScenes.append(c);
+    });
+    updateCtl();
+    rv.classList.remove('cin'); void ring.offsetWidth;
+    cinT = setTimeout(() => { rv.classList.add('cin'); }, animated ? 480 : 30);
+    return slots;
+  };
+  const updateCtl = () => {
     if (!sel) return;
-    const r = info(sel), on = r.devices.filter((d) => d.on), ac = r.devices.find((d) => d.kind === 'climate');
-    const m = ac && ac.on && /(\d+)\s*°/.exec(ac.text || '');
-    const pill = !r.devices.length ? 'sem aparelhos' : on.length ? '&bull; ' + on.length + (on.length > 1 ? ' ligados' : ' ligado') : 'tudo desligado';
-    panel.innerHTML = `<div class="pk"><small>CÔMODO</small><span class="pill${on.length ? ' on' : ''}">${pill}</span></div>
-      <h2>${esc(r.label)}</h2>
-      <div class="nums"><div><b>${r.devices.length}</b><span>Aparelhos</span></div><div><b>${on.length}</b><span>Ligados</span></div><div><b>${m ? m[1] + '°' : '—'}</b><span>Temperatura</span></div></div>
-      <p class="hl">${highlight(r)}</p><p class="desc">${esc(TEXT[sel] || '')}</p>
-      <ul class="dev">${r.devices.map((d, i) => `<li class="${d.on ? 'on' : ''}" data-k="${esc(d.key)}" role="switch" aria-checked="${d.on}" tabindex="0"><span class="n">${String(i + 1).padStart(2, '0')}</span><span class="t"><b>${esc(d.label)}</b><em>${esc(subtitle(d))}</em></span><span class="sw"></span></li>`).join('')}</ul>
-      <div class="acts"><button type="button" class="pri" data-a="all"${r.devices.length ? '' : ' disabled'}>${r.devices.length && on.length === r.devices.length ? 'Desligar tudo' : 'Ligar tudo'}</button><button type="button" data-a="back">Voltar à casa</button></div>`;
+    const r = info(sel), on = r.devices.filter((d) => d.on).length;
+    cCount.textContent = !r.devices.length ? 'sem aparelhos' : on ? on + ' de ' + r.devices.length + (on === 1 ? ' ligado' : ' ligados') : 'tudo desligado';
+    cCount.classList.toggle('on', on > 0);
+    for (const s of slots) {
+      const d = r.devices.find((x) => x.key === s.d.key); if (!d) continue; s.d = d;
+      s.orb.setAttribute('aria-pressed', d.on ? 'true' : 'false'); s.orb.setAttribute('aria-label', nameOf(d) + ', ' + stateOf(d));
+      s.nm.textContent = nameOf(d); s.st.textContent = stateOf(d); s.st.className = d.on ? 'on' : '';
+      s.dv.classList.toggle('ac-on', d.kind === 'climate' && d.on);
+    }
+    const want = {}; for (const c of cScenes.children) { const w = c.__df.want(); c.setAttribute('aria-pressed', r.devices.length && r.devices.every((d) => !!w[d.key] === d.on) ? 'true' : 'false'); }
   };
-  panel.addEventListener('click', (e) => {
-    e.stopPropagation();   // o painel se redesenha a cada mudança: o alvo sairia da página e o clique fecharia o cômodo
-    const li = e.target.closest('li[data-k]'), a = e.target.closest('button[data-a]');
-    if (li) api.toggle(sel, li.dataset.k);
-    else if (a && a.dataset.a === 'back') close();
-    else if (a) { const r = info(sel), allOn = r.devices.length && r.devices.every((d) => d.on); for (const d of r.devices) if (d.on === !!allOn) api.toggle(sel, d.key); }
-  });
-  panel.addEventListener('keydown', (e) => { const li = e.target.closest && e.target.closest('li[data-k]'); if (li && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); api.toggle(sel, li.dataset.k); } });
-
   const open = (id) => {
     if (!ready || busy) return;
-    if (sel) pts[sel].classList.remove('sel');
-    sel = id; pts[id].classList.add('sel'); rv.classList.add('open'); renderPanel(); refit(true); tip.classList.remove('show'); setHover(null);
+    const was = sel; if (was) pts[was].classList.remove('sel');
+    if (!sel) { const sc = document.getElementById('maqSec'); if (Math.abs(sc.getBoundingClientRect().top) > 1) sc.scrollIntoView({ block: 'start' }); }
+    document.documentElement.classList.add('rv-lock');
+    sel = id; pts[id].classList.add('sel'); rv.classList.add('open'); refit(true); tip.classList.remove('show'); setHover(null);
+    for (const b of Object.values(pts)) b.tabIndex = -1;
+    buildCtl(!was);
+    if (!was) kbd && setTimeout(() => { const f = ring.querySelector('.orb') || document.getElementById('cClose'); f && f.focus({ preventScroll: true }); }, 900);
   };
-  const close = () => { if (!sel) return; pts[sel].classList.remove('sel'); sel = null; rv.classList.remove('open'); refit(true); };
+  const close = () => {
+    if (!sel) return;
+    const id = sel, inside = ctl.contains(document.activeElement);
+    clearTimeout(cinT); rv.classList.remove('cin');
+    pts[id].classList.remove('sel'); sel = null; rv.classList.remove('open'); refit(true); document.documentElement.classList.remove('rv-lock');
+    for (const b of Object.values(pts)) b.tabIndex = 0;
+    if (inside) pts[id].focus({ preventScroll: true });
+    setTimeout(() => { if (!sel) { ring.textContent = ''; slots = []; } }, 700);
+  };
+  document.getElementById('cClose').addEventListener('click', (e) => { e.stopPropagation(); close(); });
+  let kbd = false;
+  addEventListener('keydown', () => { kbd = true; }, true); addEventListener('pointerdown', () => { kbd = false; }, true);
 
   // ---- ponteiro ----
   const roomAt = (cx, cy) => {
@@ -556,7 +1014,7 @@ if (lsGet(LS_URL) && lsGet(LS_TOKEN)) startLive(lsGet(LS_URL), lsGet(LS_TOKEN));
     for (const [id, [x, y]] of Object.entries(PTS)) { const d = Math.hypot(xr - x, (yr - y) * 0.625); if (d < bd) { bd = d; best = id; } }
     return best;
   };
-  const inUI = (t) => t.closest && t.closest('#rvPanel, .rvnav');
+  const inUI = (t) => t.closest && t.closest('.ui, .dv, .rvnav');
   rv.addEventListener('pointermove', (e) => { if (!ready || busy || e.pointerType !== 'mouse' || inUI(e.target)) { if (e.pointerType === 'mouse' && ready && inUI(e.target)) setHover(null); return; } setHover(roomAt(e.clientX, e.clientY)); });
   rv.addEventListener('pointerleave', () => setHover(null));
   rv.addEventListener('click', (e) => {
@@ -565,7 +1023,7 @@ if (lsGet(LS_URL) && lsGet(LS_TOKEN)) startLive(lsGet(LS_URL), lsGet(LS_TOKEN));
     if (id) open(id); else close();
   });
   addEventListener('keydown', (e) => { if (e.key === 'Escape' && !document.body.classList.contains('mode3d')) close(); });
-  addEventListener('resize', () => { if (!document.body.classList.contains('mode3d')) refit(false); });
+  addEventListener('resize', () => { if (!document.body.classList.contains('mode3d')) { refit(false); if (sel) buildCtl(false); } });
 
   // ---- giro de entrada ----
   const frames = [];
@@ -598,11 +1056,11 @@ if (lsGet(LS_URL) && lsGet(LS_TOKEN)) startLive(lsGet(LS_URL), lsGet(LS_TOKEN));
       await wait(500);
     } else { base.style.opacity = 1; }
     if (my !== runId) return;
-    ready = true; busy = false; rv.classList.add('ready'); paint(); if (sel) renderPanel();
+    ready = true; busy = false; rv.classList.add('ready'); paint(); if (sel) updateCtl();
   };
 
-  api.onChange(() => { paint(); if (hov) showTip(hov); if (sel) renderPanel(); });
-  [400, 1500, 3500].forEach((t) => setTimeout(() => { paint(); if (sel) renderPanel(); }, t));
+  api.onChange(() => { paint(); if (hov) showTip(hov); if (sel) updateCtl(); });
+  [400, 1500, 3500].forEach((t) => setTimeout(() => { paint(); if (sel) updateCtl(); }, t));
 
   // ---- menu ----
   document.getElementById('mHome').addEventListener('click', close);
@@ -610,10 +1068,11 @@ if (lsGet(LS_URL) && lsGet(LS_TOKEN)) startLive(lsGet(LS_URL), lsGet(LS_TOKEN));
   document.getElementById('mHA').addEventListener('click', () => document.getElementById('haBtn').click());
   const go3d = (on) => {
     document.body.classList.toggle('mode3d', on);
-    if (on) { close(); setHover(null); requestAnimationFrame(() => { dispatchEvent(new Event('resize')); setTimeout(() => dispatchEvent(new Event('resize')), 300); }); }
-    else requestAnimationFrame(() => refit(false));
+    if (on) { window.scrollTo(0, 0); close(); setHover(null); requestAnimationFrame(() => { dispatchEvent(new Event('resize')); setTimeout(() => dispatchEvent(new Event('resize')), 300); }); }
+    else requestAnimationFrame(() => { refit(false); const sc = document.getElementById('maqSec'); sc && sc.scrollIntoView({ block: 'start' }); });
   };
   document.getElementById('mGo').addEventListener('click', () => go3d(true));
+  document.getElementById('mGo2').addEventListener('click', () => go3d(true));
   document.getElementById('rvBack3d').addEventListener('click', () => go3d(false));
 
   if (new URLSearchParams(location.search).get('modo') === '3d') document.body.classList.add('mode3d');

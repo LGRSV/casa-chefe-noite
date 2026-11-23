@@ -143,10 +143,7 @@ function roomGaragemJardim(ctx) {
   tube(loose, [13.2, 0.53, 12.2], [12.98, 0.05, 12.34], 0.013, P.hose);
 
   // ======================= PÁTIO / ENTRADA (asfalto x 2,4–13,4 · z 12,4–16,6) =======================
-  // Vaga de visitante pintada no asfalto, em frente ao vão da garagem (x 3,4–8,0 · z 12,95–15,35) + calço de roda
-  for (const z of [12.95, 15.35]) add(box(4.6, 0.006, 0.1, P.paintWhite, 5.7, 0.018, z, { cast: false }));
-  add(box(0.1, 0.006, 2.5, P.paintWhite, 8.0, 0.018, 14.15, { cast: false }));
-  add(box(0.15, 0.1, 0.55, P.yellow, 7.6, 0.05, 14.15));
+  // 22/11: removido a pedido do João (demarcação branca da vaga de visitante no pátio e o calço de roda; o piso do pátio continua)
 
   // 22/11: removido a pedido do João (caixa de correio do portão de pedestre; portãozinho fechado, muro contínuo)
 

@@ -166,8 +166,7 @@ function roomQuartoCasal(ctx) {
   base(3.45, 0.015, 1.8, 0.0825);      // fundo
   base(0.015, 4.05, 0.0825, 2.1);      // esquerda
   base(0.015, 4.05, 3.5175, 2.1);      // direita
-  base(0.925, 0.015, 0.5375, 4.1175);  // frente, à esquerda da porta
-  base(1.625, 0.015, 2.7125, 4.1175);  // frente, à direita da porta
+  base(3.45, 0.015, 1.8, 4.1175);  // frente (22/11: sem porta, rodapé contínuo)
 
   // ---------------- tapete + cama + criados + abajures + objetos ----------------
   place(rug(), 1.8, 2.10);                                   // x 0,8–2,8 · z 1,0–3,2 (livre do giro da porta)
@@ -193,14 +192,14 @@ function roomQuartoCasal(ctx) {
   add(cyl(0.185, 0.185, 0.03, wicker, 0.33, 0.515, 2.0, 14));
 
   // ---------------- cômoda com espelho redondo (parede direita) + objetos ----------------
-  place(dresser(), 3.22, 2.95, -Math.PI / 2);                // x 2,995–3,445 · z 2,45–3,45; frente para -x
-  const mirrorFrame = cyl(0.29, 0.29, 0.02, walnutDk, 3.514, 1.45, 2.95, 28); mirrorFrame.rotation.z = Math.PI / 2; add(mirrorFrame);
-  const mirrorGlass = cyl(0.26, 0.26, 0.006, M.mirror, 3.501, 1.45, 2.95, 28); mirrorGlass.rotation.z = Math.PI / 2; mirrorGlass.castShadow = false; add(mirrorGlass);
-  add(box(0.30, 0.015, 0.20, brass, 3.28, 0.8575, 2.70));                 // bandeja
-  add(box(0.05, 0.10, 0.03, amber, 3.24, 0.915, 2.66));                   // perfumes
-  add(box(0.04, 0.13, 0.04, amber, 3.33, 0.93, 2.73));
-  add(put(box(0.012, 0.15, 0.12, walnutDk, 0, 0, 0), 3.30, 0.925, 3.15, 0, 0, -0.12)); // porta-retrato inclinado
-  add(cyl(0.035, 0.035, 0.06, linenLt, 3.25, 0.88, 3.32, 12));            // vela
+  place(dresser(), 3.22, 2.2, -Math.PI / 2);                // x 2,995–3,445 · z 2,45–3,45; frente para -x
+  const mirrorFrame = cyl(0.29, 0.29, 0.02, walnutDk, 3.514, 1.45, 2.2, 28); mirrorFrame.rotation.z = Math.PI / 2; add(mirrorFrame);
+  const mirrorGlass = cyl(0.26, 0.26, 0.006, M.mirror, 3.501, 1.45, 2.2, 28); mirrorGlass.rotation.z = Math.PI / 2; mirrorGlass.castShadow = false; add(mirrorGlass);
+  add(box(0.30, 0.015, 0.20, brass, 3.28, 0.8575, 1.95));                 // bandeja
+  add(box(0.05, 0.10, 0.03, amber, 3.24, 0.915, 1.91));                   // perfumes
+  add(box(0.04, 0.13, 0.04, amber, 3.33, 0.93, 1.98));
+  add(put(box(0.012, 0.15, 0.12, walnutDk, 0, 0, 0), 3.30, 0.925, 2.40, 0, 0, -0.12)); // porta-retrato inclinado
+  add(cyl(0.035, 0.035, 0.06, linenLt, 3.25, 0.88, 2.57, 12));            // vela
   // 22/11: removido a pedido do João (planta no canto da janela da frente)
 
   // ---------------- janela do fundo: persiana rolô (meio aberta) + cortinas de linho ----------------

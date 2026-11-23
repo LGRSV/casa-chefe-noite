@@ -52,7 +52,7 @@ def room_of_obj(o):
 def _desc(o):
     for c in o.children:
         yield c; yield from _desc(c)
-CAR = set(d for d in _desc(bpy.data.objects['Node_65']) if d.type == 'MESH')
+CAR = set(d for d in _desc(bpy.data.objects['Node_64']) if d.type == 'MESH')  # raiz do carro (era Node_65 antes do re-export; geometria conferida igual)
 CAR_MATS = set(s_.material.name for o in CAR for s_ in o.material_slots if s_.material)
 for o in bpy.data.objects:   # quem nao e carro e usa material do carro ganha copia propria
     if o.type == 'MESH' and o not in CAR:
